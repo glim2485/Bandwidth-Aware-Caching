@@ -6,7 +6,14 @@ import (
 	"errors"
 	common "gjlim2485/bandwidthawarecaching/common"
 	"os"
+	"sync"
 )
+
+type userIntersection struct {
+	Users        []string `json: users`
+	Intersection []string `json: intersection`
+	RequestFile  string   `json: requestfile`
+}
 
 type PaddingPoint struct {
 	File          string `json: file`
@@ -148,4 +155,46 @@ func xorData(data1 []byte, data2 []byte) []byte {
 		data1[i] ^= data2[i]
 	}
 	return data1
+}
+
+func MakeGroups(userData []common.UserData) {
+	var wg sync.WaitGroup
+	groups := make(map[string][]common.UserData)
+	for _, s := range userData {
+		request := s.RequestData
+		groups[request] = append(groups[request], s)
+	}
+	wg.Add(len(groups))
+	dataChannel := make(chan userIntersection, len(groups))
+	for requestFile, userdata := range groups {
+		go FindIntersection(&wg, userdata, requestFile, dataChannel)
+	}
+	wg.Wait()
+	close(dataChannel)
+	var intersectionCollection []userIntersection
+	for result := range dataChannel {
+		intersectionCollection = append(intersectionCollection, result)
+	}
+}
+
+func FindIntersection(wg *sync.WaitGroup, userSets []common.UserData, requestFile string, resultCh chan<- userIntersection) {
+	defer wg.Done()
+	var users []string
+	var sets = make(map[string]int)
+	for _, value := range userSets { //count every occurence of each local cache
+		users = append(users, value.UserIP)
+		for _, localcache := range value.LocalCache {
+			sets[localcache] += 1
+		}
+	}
+
+	total_set := len(userSets)
+	var intersection []string
+	for index, value := range sets {
+		if value == total_set {
+			intersection = append(intersection, index)
+		}
+	}
+
+	resultCh <- userIntersection{Users: users, Intersection: intersection, RequestFile: requestFile}
 }
