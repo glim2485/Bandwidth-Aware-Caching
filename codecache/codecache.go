@@ -167,7 +167,7 @@ func MakeGroups(userData []common.UserData) {
 	wg.Add(len(groups))
 	dataChannel := make(chan userIntersection, len(groups))
 	for requestFile, userdata := range groups {
-		go FindIntersection(&wg, userdata, requestFile, dataChannel)
+		go FindIntersection(&wg, userdata, requestFile, dataChannel) //use go routine to do it in parallel
 	}
 	wg.Wait()
 	close(dataChannel)
