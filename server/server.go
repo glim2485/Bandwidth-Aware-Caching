@@ -2,11 +2,27 @@ package server
 
 import (
 	"fmt"
+	"gjlim2485/bandwidthawarecaching/codecache"
 	"gjlim2485/bandwidthawarecaching/common"
+	"gjlim2485/bandwidthawarecaching/latency"
 	"net"
 
 	"github.com/gin-gonic/gin"
 )
+
+func SimulIncomingData(filename string) (bool, int) {
+	hit := codecache.CheckCache(filename)
+	if hit {
+		if common.ToggleMulticast { //if multicast is on, wait
+			//manageUDP connections
+		} else {
+			//TODO: dummy values for now
+			latency.UpdateBandwidth()
+			return true, 400
+		}
+	}
+	return false, 0
+}
 
 func HTTPServer() {
 	router := gin.Default()
@@ -17,6 +33,7 @@ func HTTPServer() {
 	}
 
 	router.Run("0.0.0.0:8080")
+
 }
 
 func MulticastServer(portNumber int) {

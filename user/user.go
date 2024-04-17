@@ -5,12 +5,47 @@ import (
 	"encoding/json"
 	"fmt"
 	"gjlim2485/bandwidthawarecaching/common"
+	"gjlim2485/bandwidthawarecaching/data"
+	"gjlim2485/bandwidthawarecaching/server"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 )
 
-var CachedItems []string
+func CreateUserThread(userID int) {
+	zipf := data.GetZipfDistribution(int64(userID)) //generate its own zipf distribution
+	var CachedItems []string
+	for i := 0; i < common.UserIteration; i++ {
+		requestData := zipf.Uint64() + 1 //to make it [0,100]
+		filename := "data" + strconv.Itoa(int(requestData)) + ".mp4"
+
+		if SimulRequestData(filename) {
+			CachedItems = append(CachedItems, filename)
+		}
+	}
+}
+
+func SimulRequestData(filename string) bool {
+	request_file := "somedata.mp4"
+	hit, size := server.SimulIncomingData(request_file)
+	if hit {
+		if SimulTrasferringData(size) {
+			return true
+		}
+	}
+	return false
+}
+
+func SimulTrasferringData(filesize int) bool {
+	transferred_data := 0
+	for transferred_data < filesize {
+		transferred_data += int(common.SplitBandwidth)
+		time.Sleep(1 * time.Second)
+	}
+	return true
+}
 
 func RequestFile(filename string) {
 	url := "testurl"
