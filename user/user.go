@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"gjlim2485/bandwidthawarecaching/codecache"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/data"
 	"gjlim2485/bandwidthawarecaching/server"
@@ -11,40 +12,59 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
-func CreateUserThread(userID int) {
+func CreateUserThread(wg *sync.WaitGroup, userID int) {
+	defer wg.Done()
 	zipf := data.GetZipfDistribution(int64(userID)) //generate its own zipf distribution
-	var CachedItems []string
+	cachedItems := codecache.Constructor(common.MaxLocalCacheSize)
+	var logInput common.UserCacheHit
 	for i := 0; i < common.UserIteration; i++ {
 		requestData := zipf.Uint64() + 1 //to make it [0,100]
 		filename := "data" + strconv.Itoa(int(requestData)) + ".mp4"
 
-		if SimulRequestData(filename) {
-			CachedItems = append(CachedItems, filename)
+		//Check local/user cache first before sending request to edge
+		checkLocalCache := cachedItems.Get(filename)
+		if checkLocalCache != "" {
+			logInput = common.UserCacheHit{ItemName: filename, CacheHit: "local", TimeTaken: 0}
+		} else {
+			//If not in local cache, check edge cache
+			localCache := cachedItems.GetCacheList()
+			hit, size := server.SimulIncomingData(userID, filename, localCache)
+			if hit {
+				if common.ToggleMulticast {
+					timeTaken := SimulTrasferringData(size)
+					cachedItems.Put(filename, filename)
+					logInput = common.UserCacheHit{ItemName: filename, CacheHit: "edge", TimeTaken: timeTaken}
+				} else {
+
+				}
+			} else {
+				//not in edge, need to request from cloud
+				//TODO: develop request to cloud
+			}
 		}
+
+		//add to log
+		temp := common.UserLogInfo[userID]
+		temp.UserResult = append(temp.UserResult, logInput)
+		common.UserLogInfo[userID] = temp
 	}
 }
 
-func SimulRequestData(filename string) bool {
-	request_file := "somedata.mp4"
-	hit, size := server.SimulIncomingData(request_file)
-	if hit {
-		if SimulTrasferringData(size) {
-			return true
-		}
-	}
-	return false
-}
-
-func SimulTrasferringData(filesize int) bool {
+func SimulTrasferringData(filesize int) int {
 	transferred_data := 0
+	currentTime := time.Now()
 	for transferred_data < filesize {
 		transferred_data += int(common.SplitBandwidth)
 		time.Sleep(1 * time.Second)
 	}
-	return true
+	newTime := time.Now()
+	timeTaken := newTime.Sub(currentTime)
+	timeTakenInt := int(timeTaken.Milliseconds())
+	return timeTakenInt
 }
 
 func RequestFile(filename string) {

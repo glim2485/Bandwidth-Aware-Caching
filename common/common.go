@@ -18,8 +18,9 @@ type UserLog struct {
 }
 
 type UserCacheHit struct {
-	ItemName string
-	CacheHit bool
+	ItemName  string
+	CacheHit  string
+	TimeTaken int
 }
 
 var UserNumbers int = 100
@@ -41,3 +42,9 @@ var TotalBandwidth float64 = 1000
 var ConnectedUsersTCP int = 0
 var ConnectedUsersMulticast []ConnectedUsersUDP
 var SplitBandwidth float64
+var MinimumUserBandwidth float64 = 13.3
+var ToggleMulticastMultiplier float64 = 1 //the higher, the higher the bar to trigger
+var MulticastWaitTime int = 2000          //in milliseconds
+var MaxLocalCacheSize int = 10
+var MaxEdgeCacheSize int = 20
+var CacheDataSize int = 5000 //in megabytes

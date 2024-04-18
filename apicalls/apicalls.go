@@ -14,7 +14,7 @@ func SendData(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if !common.ToggleCoding {
+	if !common.ToggleMulticast {
 		filePath := common.DataDirectory + "/" + userData.RequestData
 		c.File(filePath)
 	} else {
