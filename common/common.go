@@ -23,6 +23,12 @@ type UserCacheHit struct {
 	TimeTaken int
 }
 
+type UserIntersection struct {
+	Users        []string `json: users`
+	Intersection []string `json: intersection`
+	RequestFile  string   `json: requestfile`
+}
+
 var UserNumbers int = 100
 var UserIteration int = 100
 var UserLogInfo = make(map[int]UserLog)

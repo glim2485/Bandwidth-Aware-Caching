@@ -13,13 +13,8 @@ import (
 
 var EdgeCache codecache.LRUCache
 
-type CollectedData struct {
-	userID    int
-	userCache []string
-}
-
-var resultChan = make(chan CollectedData)
-var collectChan = make(chan CollectedData, 20)
+var resultChan = make(chan []common.UserIntersection)
+var collectChan = make(chan common.UserData, 20)
 
 func SimulInitializeServer() {
 	EdgeCache = codecache.Constructor(common.MaxEdgeCacheSize)
@@ -29,8 +24,8 @@ func SimulInitializeServer() {
 func SimulIncomingData(userID int, filename string, userCache []string) (bool, int) {
 	checkEdgeCache := EdgeCache.Get(filename)
 	if checkEdgeCache != "" { //hit
-		if common.ToggleMulticast { //if multicast is on, wait
-			collectChan <- CollectedData{userID: userID, userCache: userCache}
+		if common.ToggleMulticast { //if multicast is on, collect data instead of returning
+			collectChan <- common.UserData{userIP: userID, LocalCache: userCache,RequestData: filename}
 
 		} else {
 			//TODO: dummy values for now
@@ -44,9 +39,12 @@ func SimulIncomingData(userID int, filename string, userCache []string) (bool, i
 
 func MulticastDataCollector() {
 	timer := time.NewTicker(time.Duration(common.MulticastWaitTime) * time.Millisecond)
-	var collectedData []CollectedData
+	var collectedData []common.UserData
 	for {
 		select {
+		case <-resultChan:
+			//got previous request back
+
 		case <-timer.C:
 			//keep collecting data
 			for len(collectChan) > 0 {
@@ -55,8 +53,8 @@ func MulticastDataCollector() {
 			}
 		default:
 			//do something with said data
+			go codecache.MakeGroups(collectedData, resultChan)
 			collectedData = nil
-
 		}
 	}
 

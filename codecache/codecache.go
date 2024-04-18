@@ -9,12 +9,6 @@ import (
 	"sync"
 )
 
-type userIntersection struct {
-	Users        []string `json: users`
-	Intersection []string `json: intersection`
-	RequestFile  string   `json: requestfile`
-}
-
 type PaddingPoint struct {
 	File          string `json: file`
 	StartingPoint int    `json: startingPoint`
@@ -157,7 +151,7 @@ func xorData(data1 []byte, data2 []byte) []byte {
 	return data1
 }
 
-func MakeGroups(userData []common.UserData) {
+func MakeGroups(userData []common.UserData, returnChan chan) {
 	var wg sync.WaitGroup
 	groups := make(map[string][]common.UserData)
 	for _, s := range userData {
@@ -165,19 +159,20 @@ func MakeGroups(userData []common.UserData) {
 		groups[request] = append(groups[request], s)
 	}
 	wg.Add(len(groups))
-	dataChannel := make(chan userIntersection, len(groups))
+	dataChannel := make(chan common.UserIntersection, len(groups))
 	for requestFile, userdata := range groups {
 		go FindIntersection(&wg, userdata, requestFile, dataChannel) //use go routine to do it in parallel
 	}
 	wg.Wait()
 	close(dataChannel)
-	var intersectionCollection []userIntersection
+	var intersectionCollection []common.UserIntersection
 	for result := range dataChannel {
 		intersectionCollection = append(intersectionCollection, result)
 	}
+	returnChan <- intersectionCollection
 }
 
-func FindIntersection(wg *sync.WaitGroup, userSets []common.UserData, requestFile string, resultCh chan<- userIntersection) {
+func FindIntersection(wg *sync.WaitGroup, userSets []common.UserData, requestFile string, resultCh chan<- common.UserIntersection) {
 	defer wg.Done()
 	var users []string
 	var sets = make(map[string]int)
@@ -196,5 +191,5 @@ func FindIntersection(wg *sync.WaitGroup, userSets []common.UserData, requestFil
 		}
 	}
 
-	resultCh <- userIntersection{Users: users, Intersection: intersection, RequestFile: requestFile}
+	resultCh <- common.UserIntersection{Users: users, Intersection: intersection, RequestFile: requestFile}
 }
