@@ -7,13 +7,13 @@ import (
 	"gjlim2485/bandwidthawarecaching/codecache"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/data"
+	"gjlim2485/bandwidthawarecaching/latency"
 	"gjlim2485/bandwidthawarecaching/server"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"sync"
-	"time"
 )
 
 func CreateUserThread(wg *sync.WaitGroup, userID int) {
@@ -35,7 +35,7 @@ func CreateUserThread(wg *sync.WaitGroup, userID int) {
 			hit, size := server.SimulIncomingData(userID, filename, localCache)
 			if hit {
 				if common.ToggleMulticast {
-					timeTaken := SimulTrasferringData(size)
+					timeTaken := latency.SimulTransferringData(size)
 					cachedItems.Put(filename, filename)
 					logInput = common.UserCacheHit{ItemName: filename, CacheHit: "edge", TimeTaken: timeTaken}
 				} else {
@@ -52,19 +52,6 @@ func CreateUserThread(wg *sync.WaitGroup, userID int) {
 		temp.UserResult = append(temp.UserResult, logInput)
 		common.UserLogInfo[userID] = temp
 	}
-}
-
-func SimulTrasferringData(filesize int) int {
-	transferred_data := 0
-	currentTime := time.Now()
-	for transferred_data < filesize {
-		transferred_data += int(common.SplitBandwidth)
-		time.Sleep(1 * time.Second)
-	}
-	newTime := time.Now()
-	timeTaken := newTime.Sub(currentTime)
-	timeTakenInt := int(timeTaken.Milliseconds())
-	return timeTakenInt
 }
 
 func RequestFile(filename string) {
