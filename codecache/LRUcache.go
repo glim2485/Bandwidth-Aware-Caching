@@ -1,5 +1,11 @@
 package codecache
 
+import (
+	"fmt"
+	"gjlim2485/bandwidthawarecaching/common"
+	"gjlim2485/bandwidthawarecaching/latency"
+)
+
 type LRUCache struct {
 	capacity int
 	cache    map[string]*Node
@@ -10,6 +16,8 @@ type LRUCache struct {
 type Node struct {
 	key   string
 	value string
+	count int
+	InUse bool
 	prev  *Node
 	next  *Node
 }
@@ -36,13 +44,50 @@ func (this *LRUCache) Put(key string, value string) {
 		node.value = value
 		this.moveToFront(node)
 	} else {
-		newNode := &Node{key: key, value: value}
+		newNode := &Node{key: key, value: value, InUse: true}
 		if len(this.cache) >= this.capacity {
 			delete(this.cache, this.tail.key)
 			this.removeNode(this.tail)
 		}
 		this.cache[key] = newNode
 		this.addToFront(newNode)
+	}
+}
+
+func (this *LRUCache) PutEdge(key string, value string) {
+	didRemove := false
+	if node, ok := this.cache[key]; ok {
+		node.value = value
+		this.moveToFront(node)
+	} else {
+		newNode := &Node{key: key, value: value, count: 1, InUse: true}
+		if len(this.cache) >= this.capacity {
+			if !this.cache[this.tail.key].InUse { //if the tail is not in use, remove it
+				delete(this.cache, this.tail.key)
+				this.removeNode(this.tail)
+				didRemove = true
+			} else {
+				//if the tail is in use, remove the first non-in use node
+				current := this.tail
+				for current != nil {
+					if !current.InUse {
+						delete(this.cache, current.key)
+						this.removeNode(current)
+						didRemove = true
+						break
+					}
+					current = current.prev
+				}
+			}
+		}
+		if didRemove {
+			//simulate retrieving data from cloud
+			latency.SimulTransferringData(common.CacheDataSize)
+			this.cache[key] = newNode
+			this.addToFront(newNode)
+		} else {
+			fmt.Printf("All items cached currently in use, cannot add new item\n")
+		}
 	}
 }
 
