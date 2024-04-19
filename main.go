@@ -55,8 +55,8 @@ func main() {
 	}
 	cellIndex++
 	totalDurationMilliseconds := int64(totalTime / time.Millisecond)
-	f.SetCellValue(sheetName, fmt.Sprintf("A%d", cellIndex), "Total Duration")
-	f.SetCellValue(sheetName, fmt.Sprintf("B%d", cellIndex), fmt.Sprintf("%d ms", totalDurationMilliseconds))
+	f.SetCellValue(sheetName, fmt.Sprintf("F1", cellIndex), "Total Duration")
+	f.SetCellValue(sheetName, fmt.Sprintf("G1", cellIndex), fmt.Sprintf("%d ms", totalDurationMilliseconds))
 	f.SetActiveSheet(index)
 	if err = f.Save(); err != nil {
 		fmt.Println(err)
