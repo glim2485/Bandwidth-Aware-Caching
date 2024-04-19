@@ -151,7 +151,7 @@ func xorData(data1 []byte, data2 []byte) []byte {
 	return data1
 }
 
-func MakeGroups(userData []common.UserData, returnChan chan) {
+func MakeGroups(userData []common.UserData, returnChan chan []common.UserIntersection) {
 	var wg sync.WaitGroup
 	groups := make(map[string][]common.UserData)
 	for _, s := range userData {
@@ -169,7 +169,13 @@ func MakeGroups(userData []common.UserData, returnChan chan) {
 	for result := range dataChannel {
 		intersectionCollection = append(intersectionCollection, result)
 	}
-	returnChan <- intersectionCollection
+
+	if common.EnableCodeCache {
+		//do something
+	} else {
+		//return only single request intersection
+		returnChan <- intersectionCollection
+	}
 }
 
 func FindIntersection(wg *sync.WaitGroup, userSets []common.UserData, requestFile string, resultCh chan<- common.UserIntersection) {
@@ -192,4 +198,56 @@ func FindIntersection(wg *sync.WaitGroup, userSets []common.UserData, requestFil
 	}
 
 	resultCh <- common.UserIntersection{Users: users, Intersection: intersection, RequestFile: requestFile}
+}
+
+func FindRequestIntersection(intersectionSets []common.UserIntersection) {
+	group := make(map[string]common.CodedIntersection)
+	//O(n) time complexity
+	for _, s := range intersectionSets {
+		var insertGroup common.CodedIntersection
+		insertGroup.Users = s.Users
+		for i := range s.Intersection {
+			insertGroup.Intersection[s.Intersection[i]] = true
+		}
+		insertGroup.CodedFile[s.RequestFile] = true
+		group[s.RequestFile] = insertGroup
+	}
+
+	//m * n complexity here (checking intersections becomes O(n^3))
+	for _, s := range intersectionSets {
+		for _, g := range group {
+			if g.Intersection[s.RequestFile] && FindInclusionGroup2Set(g.CodedFile, s.Intersection) {
+				//found a group and set that can be coded
+				g.Users = append(g.Users, s.Users...)
+				g.CodedFile[s.RequestFile] = true
+				g.Intersection = FindMappedIntersection(g.Intersection, s.Intersection)
+				delete(group, s.RequestFile)
+				break
+			}
+		}
+	}
+}
+
+func FindInclusionGroup2Set(items map[string]bool, set []string) bool {
+	checkTotal := len(items)
+	checkCurrent := 0
+	for _, s := range set {
+		if items[s] {
+			checkCurrent++
+			if checkCurrent == checkTotal {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func FindMappedIntersection(setA map[string]bool, setB []string) map[string]bool {
+	intersection := make(map[string]bool) // Initialize the map
+	for _, s := range setB {
+		if setA[s] {
+			intersection[s] = true
+		}
+	}
+	return intersection
 }

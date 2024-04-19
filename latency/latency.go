@@ -3,8 +3,11 @@ package latency
 import (
 	"gjlim2485/bandwidthawarecaching/common"
 	"math"
+	"sync"
 	"time"
 )
+
+var mutex sync.Mutex
 
 func SimulTransferringData(filesize int) int {
 	transferred_data := 0
@@ -17,6 +20,15 @@ func SimulTransferringData(filesize int) int {
 	timeTaken := newTime.Sub(currentTime)
 	timeTakenInt := int(timeTaken.Milliseconds())
 	return timeTakenInt
+}
+
+func SimulUpdateConcurrentConnection(amount int) {
+	mutex.Lock()
+	common.SimulUserConnected += amount
+	if common.SimulUserConnected != 0 {
+		common.SplitBandwidth = common.TotalBandwidth / float64(common.SimulUserConnected)
+	}
+	mutex.Unlock()
 }
 
 func CalculateExpectedTime(bandwidth int, datasize int) float64 {

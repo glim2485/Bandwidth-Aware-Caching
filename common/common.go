@@ -29,7 +29,14 @@ type UserIntersection struct {
 	RequestFile  string   `json: requestfile`
 }
 
+type CodedIntersection struct {
+	Users        []string        `json: users`
+	Intersection map[string]bool `json: intersection`
+	CodedFile    map[string]bool `json: codedfiles`
+}
+
 var UserNumbers int = 100
+var SimulUserConnected int = 0
 var UserIteration int = 100
 var UserLogInfo = make(map[int]UserLog)
 var CloudIP string = "192.168.0.2"
@@ -54,3 +61,4 @@ var MulticastWaitTime int = 2000          //in milliseconds
 var MaxLocalCacheSize int = 10
 var MaxEdgeCacheSize int = 20
 var CacheDataSize int = 5000 //in megabytes
+var EnableCodeCache bool = true
