@@ -6,6 +6,7 @@ import (
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/latency"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,18 +23,19 @@ func SimulInitializeServer() {
 }
 
 func SimulIncomingData(userID int, filename string, userCache []string) (bool, int) {
-	checkEdgeCache := EdgeCache.Get(filename)
-	if checkEdgeCache != "" { //hit
-		if common.ToggleMulticast { //if multicast is on, collect data instead of returning
-			collectChan <- common.UserData{userIP: userID, LocalCache: userCache,RequestData: filename}
-
-		} else {
-			//TODO: dummy values for now
+	if common.ToggleMulticast {
+		collectChan <- common.UserData{UserIP: strconv.Itoa(userID), LocalCache: userCache, RequestData: filename}
+		collectionResult := <-resultChan
+		//return true and miss according to collectionResult
+	} else {
+		hit := EdgeCache.Get(filename)
+		if hit != "" {
+			//cache was hit
 			latency.UpdateBandwidth()
 			return true, common.CacheDataSize
+		} else {
+			//cache miss
 		}
-	} else {
-		return false, 0
 	}
 }
 
