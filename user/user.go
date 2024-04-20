@@ -28,22 +28,22 @@ func CreateUserThread(wg *sync.WaitGroup, userID int) {
 		//Check local/user cache first before sending request to edge
 		checkLocalCache := cachedItems.Get(filename)
 		if checkLocalCache != "" {
-			logInput = common.UserCacheHit{ItemName: filename, CacheHit: "local", TimeTaken: 0}
+			logInput = common.UserCacheHit{ItemName: filename, CacheHit: "local", TimeTaken: 0, Multicast: false}
 		} else {
 			//If not in local cache, check edge cache
 			localCache := cachedItems.GetCacheList()
 			hit, size := server.SimulIncomingData(userID, filename, localCache)
-			if hit {
-				if common.ToggleMulticast {
-					timeTaken := latency.SimulTransferringData(size)
-					cachedItems.Put(filename, filename)
-					logInput = common.UserCacheHit{ItemName: filename, CacheHit: "edge", TimeTaken: timeTaken}
-				} else {
-
-				}
+			if common.ToggleMulticast {
+				//if multicast is enabled
+				timeTaken := latency.SimulTransferringData(size)
+				cachedItems.Put(filename, filename)
+				logInput = common.UserCacheHit{ItemName: filename, CacheHit: "edge", TimeTaken: timeTaken, Multicast: true}
 			} else {
-				//not in edge, need to request from cloud
-				//TODO: develop request to cloud
+				//if multicast is disabled
+				timeTaken := latency.SimulTransferringData(size)
+				latency.SimulUpdateConcurrentConnection(-1) //close connection
+				cachedItems.Put(filename, filename)
+				logInput = common.UserCacheHit{ItemName: filename, CacheHit: "edge", TimeTaken: timeTaken, Multicast: false}
 			}
 		}
 

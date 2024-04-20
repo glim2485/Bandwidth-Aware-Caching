@@ -14,7 +14,6 @@ import (
 
 var EdgeCache codecache.LRUCache
 
-var resultChan = make(chan []common.UserIntersection)
 var SimulChan = make(chan []common.UserIntersection)
 var collectChan = make(chan common.UserData, 20)
 
@@ -26,8 +25,14 @@ func SimulInitializeServer() {
 func SimulIncomingData(userID int, filename string, userCache []string) (bool, int) {
 	if common.ToggleMulticast {
 		collectChan <- common.UserData{UserIP: strconv.Itoa(userID), LocalCache: userCache, RequestData: filename}
+		myTicket := common.UserRequestTicket
 		//perform blocking wait
-		result := <-SimulChan
+		for common.UserRequestTicketResult[myTicket] == nil {
+			//wait for the data to come back
+		}
+
+		if !common.EnableCodeCache {
+		result := common.UserRequestTicketResult[myTicket]
 		for _, s := range result {
 			if s.RequestFile == filename {
 				if EdgeCache.Get(filename) != "" {
@@ -37,13 +42,17 @@ func SimulIncomingData(userID int, filename string, userCache []string) (bool, i
 					//cache miss
 					EdgeCache.PutEdge(filename, filename)
 					return false, common.CacheDataSize
+					}
 				}
 			}
+		} else {
+			//code cache enabled
+			
 		}
-
 		latency.SimulUpdateConcurrentConnection(len(result))
 		//return true and miss according to collectionResult
 	} else {
+		//unicast scenario
 		hit := EdgeCache.Get(filename)
 		if hit != "" {
 			//cache was hit
@@ -51,7 +60,9 @@ func SimulIncomingData(userID int, filename string, userCache []string) (bool, i
 			return true, common.CacheDataSize
 		} else {
 			//cache miss
+			latency.SimulUpdateConcurrentConnection(1) //simulate edge to cache fetch
 			EdgeCache.PutEdge(filename, filename)
+			latency.SimulUpdateConcurrentConnection(-1) //undo connection
 			return false, common.CacheDataSize
 		}
 	}
@@ -62,14 +73,6 @@ func SimulMulticastDataCollector() {
 	var collectedData []common.UserData
 	for {
 		select {
-		case result := <-resultChan:
-			//got previous request back
-			if common.EnableCodeCache {
-				codecache.FindRequestIntersection(result)
-			} else {
-				SimulChan <- result
-			}
-
 		case <-timer.C:
 			//keep emptying the channel
 			for len(collectChan) > 0 {
@@ -78,7 +81,8 @@ func SimulMulticastDataCollector() {
 			}
 		default:
 			//do something with said data
-			go codecache.MakeGroups(collectedData, resultChan)
+			go codecache.MakeGroups(collectedData)
+			common.UserRequestTicket++
 			collectedData = nil
 		}
 	}

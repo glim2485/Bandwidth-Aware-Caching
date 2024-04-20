@@ -21,12 +21,13 @@ type UserCacheHit struct {
 	ItemName  string
 	CacheHit  string
 	TimeTaken int
+	Multicast bool
 }
 
 type UserIntersection struct {
 	Users        []string `json: users`
 	Intersection []string `json: intersection`
-	RequestFile  string   `json: requestfile`
+	RequestFile  []string   `json: requestfile`
 }
 
 type CodedIntersection struct {
@@ -36,6 +37,8 @@ type CodedIntersection struct {
 }
 
 var UserNumbers int = 100
+var UserRequestTicket int = 0
+var UserRequestTicketResult = make(map[int][]common.UserIntersection)
 var SimulUserConnected int = 0
 var UserIteration int = 100
 var UserLogInfo = make(map[int]UserLog)

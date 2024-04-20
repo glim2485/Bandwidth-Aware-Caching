@@ -151,7 +151,7 @@ func xorData(data1 []byte, data2 []byte) []byte {
 	return data1
 }
 
-func MakeGroups(userData []common.UserData, returnChan chan []common.UserIntersection) {
+func MakeGroups(userData []common.UserData) {
 	var wg sync.WaitGroup
 	groups := make(map[string][]common.UserData)
 	for _, s := range userData {
@@ -171,10 +171,11 @@ func MakeGroups(userData []common.UserData, returnChan chan []common.UserInterse
 	}
 
 	if common.EnableCodeCache {
-		//do something
+		//need to find intersections once more
+		FindRequestIntersection(intersectionCollection)
 	} else {
 		//return only single request intersection
-		returnChan <- intersectionCollection
+		common.UserRequestTicketResult[common.UserRequestTicket] = intersectionCollection
 	}
 }
 
