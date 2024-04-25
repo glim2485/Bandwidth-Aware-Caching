@@ -5,6 +5,7 @@ import (
 	"gjlim2485/bandwidthawarecaching/codecache"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/latency"
+	"gjlim2485/bandwidthawarecaching/lrucache"
 	"net"
 	"strconv"
 	"time"
@@ -12,60 +13,68 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var EdgeCache codecache.LRUCache
-
 var SimulChan = make(chan []common.UserIntersection)
 var collectChan = make(chan common.UserData, 20)
 
 func SimulInitializeServer() {
-	EdgeCache = codecache.Constructor(common.MaxEdgeCacheSize)
+	common.EdgeCache = lrucache.Constructor(common.MaxEdgeCacheSize)
 	go SimulMulticastDataCollector()
 }
 
-func SimulIncomingData(userID int, filename string, userCache []string) (bool, int) {
-	if common.ToggleMulticast {
+func SimulIncomingData(userID int, filename string, userCache []string) (bool, int, float64) {
+	if latency.ToggleMulticast {
 		collectChan <- common.UserData{UserIP: strconv.Itoa(userID), LocalCache: userCache, RequestData: filename}
 		myTicket := common.UserRequestTicket
 		//perform blocking wait
 		for common.UserRequestTicketResult[myTicket] == nil {
 			//wait for the data to come back
 		}
-
+		var result = common.UserRequestTicketResult[myTicket]
 		if !common.EnableCodeCache {
-		result := common.UserRequestTicketResult[myTicket]
-		for _, s := range result {
-			if s.RequestFile == filename {
-				if EdgeCache.Get(filename) != "" {
-					//cache was hit
-					return true, common.CacheDataSize
-				} else {
-					//cache miss
-					EdgeCache.PutEdge(filename, filename)
-					return false, common.CacheDataSize
+			//no code cache, so no mulple requests
+			for _, s := range result {
+				if s.RequestFile[0] == filename {
+					if common.EdgeCache.Get(filename) != "" {
+						//cache was hit
+						return true, common.CacheDataSize, (float64(1) / float64(len(s.Users)))
+					} else {
+						//cache miss
+						common.EdgeCache.SimulCheckFetchData(filename, common.CacheDataSize) //this blocks all processes until the data is fetched
+						return false, common.CacheDataSize, (float64(1) / float64(len(s.Users)))
 					}
 				}
 			}
 		} else {
 			//code cache enabled
-			
+			for _, s := range result {
+				if common.StringinSlice(filename, s.RequestFile) {
+					if s.Intersection[0] == "miss" {
+						common.EdgeCache.SimulCheckFetchData(filename, common.CacheDataSize)
+						return false, common.CacheDataSize, (float64(1) / float64(len(s.Users)))
+					} else {
+						common.EdgeCache.Get(filename) //this is done to refresh cache
+						return true, common.CacheDataSize, (float64(1) / float64(len(s.Users)))
+					}
+				}
+			}
 		}
-		latency.SimulUpdateConcurrentConnection(len(result))
-		//return true and miss according to collectionResult
 	} else {
 		//unicast scenario
-		hit := EdgeCache.Get(filename)
+		hit := common.EdgeCache.Get(filename)
 		if hit != "" {
 			//cache was hit
 			latency.SimulUpdateConcurrentConnection(1)
-			return true, common.CacheDataSize
+			return true, common.CacheDataSize, 1
 		} else {
 			//cache miss
 			latency.SimulUpdateConcurrentConnection(1) //simulate edge to cache fetch
-			EdgeCache.PutEdge(filename, filename)
+			common.EdgeCache.PutEdge(filename, filename, common.CacheDataSize)
 			latency.SimulUpdateConcurrentConnection(-1) //undo connection
-			return false, common.CacheDataSize
+			return false, common.CacheDataSize, 1
 		}
 	}
+	//error
+	return false, 0, 0
 }
 
 func SimulMulticastDataCollector() {
@@ -81,7 +90,9 @@ func SimulMulticastDataCollector() {
 			}
 		default:
 			//do something with said data
-			go codecache.MakeGroups(collectedData)
+			copiedData := make([]common.UserData, len(collectedData))
+			copy(copiedData, collectedData)
+			go codecache.MakeGroups(copiedData)
 			common.UserRequestTicket++
 			collectedData = nil
 		}

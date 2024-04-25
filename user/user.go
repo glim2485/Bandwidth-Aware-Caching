@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"gjlim2485/bandwidthawarecaching/codecache"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/data"
 	"gjlim2485/bandwidthawarecaching/latency"
+	"gjlim2485/bandwidthawarecaching/lrucache"
 	"gjlim2485/bandwidthawarecaching/server"
 	"io"
 	"net/http"
@@ -19,7 +19,7 @@ import (
 func CreateUserThread(wg *sync.WaitGroup, userID int) {
 	defer wg.Done()
 	zipf := data.GetZipfDistribution(int64(userID)) //generate its own zipf distribution
-	cachedItems := codecache.Constructor(common.MaxLocalCacheSize)
+	cachedItems := lrucache.Constructor(common.MaxLocalCacheSize)
 	var logInput common.UserCacheHit
 	for i := 0; i < common.UserIteration; i++ {
 		requestData := zipf.Uint64() + 1 //to make it [0,100]
@@ -32,19 +32,24 @@ func CreateUserThread(wg *sync.WaitGroup, userID int) {
 		} else {
 			//If not in local cache, check edge cache
 			localCache := cachedItems.GetCacheList()
-			hit, size := server.SimulIncomingData(userID, filename, localCache)
-			if common.ToggleMulticast {
-				//if multicast is enabled
-				timeTaken := latency.SimulTransferringData(size)
-				cachedItems.Put(filename, filename)
-				logInput = common.UserCacheHit{ItemName: filename, CacheHit: "edge", TimeTaken: timeTaken, Multicast: true}
+			hit, size, connModifier := server.SimulIncomingData(userID, filename, localCache)
+			var cacheHitLocation string
+			if hit {
+				cacheHitLocation = "edge"
 			} else {
-				//if multicast is disabled
-				timeTaken := latency.SimulTransferringData(size)
-				latency.SimulUpdateConcurrentConnection(-1) //close connection
-				cachedItems.Put(filename, filename)
-				logInput = common.UserCacheHit{ItemName: filename, CacheHit: "edge", TimeTaken: timeTaken, Multicast: false}
+				cacheHitLocation = "cloud"
 			}
+
+			var didMulticast bool
+			if latency.ToggleMulticast {
+				didMulticast = true
+			} else {
+				didMulticast = false
+			}
+			timeTaken := latency.SimulTransferringData(size)
+			latency.SimulUpdateConcurrentConnection(-connModifier) //close connection
+			cachedItems.Put(filename, filename)
+			logInput = common.UserCacheHit{ItemName: filename, CacheHit: cacheHitLocation, TimeTaken: timeTaken, Multicast: didMulticast}
 		}
 
 		//add to log
@@ -56,7 +61,7 @@ func CreateUserThread(wg *sync.WaitGroup, userID int) {
 
 func RequestFile(filename string) {
 	url := "testurl"
-	userData := common.UserData{UserIP: common.MyIP, LocalCache: CachedItems, RequestData: filename}
+	userData := common.UserData{UserIP: common.MyIP, LocalCache: []string{"some_items.mp4"}, RequestData: filename}
 	jsonData, _ := json.Marshal(userData)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))

@@ -1,6 +1,9 @@
 package common
 
-import "time"
+import (
+	"gjlim2485/bandwidthawarecaching/lrucache"
+	"time"
+)
 
 type UserData struct {
 	UserIP      string   `json:userip`
@@ -27,7 +30,7 @@ type UserCacheHit struct {
 type UserIntersection struct {
 	Users        []string `json: users`
 	Intersection []string `json: intersection`
-	RequestFile  []string   `json: requestfile`
+	RequestFile  []string `json: requestfile`
 }
 
 type CodedIntersection struct {
@@ -36,11 +39,13 @@ type CodedIntersection struct {
 	CodedFile    map[string]bool `json: codedfiles`
 }
 
+var EdgeCache lrucache.LRUCache
+
 var UserNumbers int = 100
 var UserRequestTicket int = 0
-var UserRequestTicketResult = make(map[int][]common.UserIntersection)
-var SimulUserConnected int = 0
-var UserIteration int = 100
+var UserRequestTicketResult = make(map[int][]UserIntersection)
+
+var UserIteration int = 10
 var UserLogInfo = make(map[int]UserLog)
 var CloudIP string = "192.168.0.2"
 var DataDirectory string = "/home/dnclab/Bandwidth-Aware-Caching/data"
@@ -49,15 +54,10 @@ var ServerIP string = "192.168.0.2"
 var ServerPort string = ":8080"
 var MulticastIP string = "192.168.0.1"
 var MulticastPort string = ":9999"
-var MulticastTriggerModifier float64 = 0.8 //lower makes the bounds tighter
-var ToggleMulticast bool = false
-var TimerTime time.Duration
 var GlobalTimer *time.Timer
 var UserDataChannel = make(chan UserData, 30)
-var TotalBandwidth float64 = 1000
 var ConnectedUsersTCP int = 0
 var ConnectedUsersMulticast []ConnectedUsersUDP
-var SplitBandwidth float64
 var MinimumUserBandwidth float64 = 13.3
 var ToggleMulticastMultiplier float64 = 1 //the higher, the higher the bar to trigger
 var MulticastWaitTime int = 2000          //in milliseconds
@@ -65,3 +65,12 @@ var MaxLocalCacheSize int = 10
 var MaxEdgeCacheSize int = 20
 var CacheDataSize int = 5000 //in megabytes
 var EnableCodeCache bool = true
+
+func StringinSlice(str string, list []string) bool {
+	for _, v := range list {
+		if v == str {
+			return true
+		}
+	}
+	return false
+}

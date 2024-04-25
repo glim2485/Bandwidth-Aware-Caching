@@ -14,7 +14,7 @@ import (
 func main() {
 	server.SimulInitializeServer()
 	var wg sync.WaitGroup
-	common.UserNumbers = 100
+	common.UserNumbers = 10
 	wg.Add(common.UserNumbers)
 	startTime := time.Now()
 	for i := 0; i < common.UserNumbers; i++ {

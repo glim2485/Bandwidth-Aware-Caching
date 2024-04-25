@@ -172,7 +172,8 @@ func MakeGroups(userData []common.UserData) {
 
 	if common.EnableCodeCache {
 		//need to find intersections once more
-		FindRequestIntersection(intersectionCollection)
+		//no need for go routine
+		common.UserRequestTicketResult[common.UserRequestTicket] = FindRequestIntersection(intersectionCollection)
 	} else {
 		//return only single request intersection
 		common.UserRequestTicketResult[common.UserRequestTicket] = intersectionCollection
@@ -198,35 +199,57 @@ func FindIntersection(wg *sync.WaitGroup, userSets []common.UserData, requestFil
 		}
 	}
 
-	resultCh <- common.UserIntersection{Users: users, Intersection: intersection, RequestFile: requestFile}
+	resultCh <- common.UserIntersection{Users: users, Intersection: intersection, RequestFile: []string{requestFile}}
 }
 
-func FindRequestIntersection(intersectionSets []common.UserIntersection) {
+func FindRequestIntersection(intersectionSets []common.UserIntersection) []common.UserIntersection {
 	group := make(map[string]common.CodedIntersection)
+	var returnUser []common.UserIntersection
+	//TODO: get cache list currentEdgeCache[]
+	currentEdgeCache := common.EdgeCache.GetCacheList()
 	//O(n) time complexity
 	for _, s := range intersectionSets {
 		var insertGroup common.CodedIntersection
-		insertGroup.Users = s.Users
-		for i := range s.Intersection {
-			insertGroup.Intersection[s.Intersection[i]] = true
+		if common.StringinSlice(s.RequestFile[0], currentEdgeCache) {
+			insertGroup.Users = s.Users
+			for i := range s.Intersection {
+				insertGroup.Intersection[s.Intersection[i]] = true
+			}
+			insertGroup.CodedFile[s.RequestFile[0]] = true
+			group[s.RequestFile[0]] = insertGroup
+		} else {
+			//not in cache, need to replace
+			returnUser = append(returnUser, common.UserIntersection{Users: s.Users, Intersection: []string{"miss"}, RequestFile: []string{s.RequestFile[0]}})
 		}
-		insertGroup.CodedFile[s.RequestFile] = true
-		group[s.RequestFile] = insertGroup
+
 	}
 
 	//m * n complexity here (checking intersections becomes O(n^3))
 	for _, s := range intersectionSets {
 		for _, g := range group {
-			if g.Intersection[s.RequestFile] && FindInclusionGroup2Set(g.CodedFile, s.Intersection) {
+			if g.Intersection[s.RequestFile[0]] && FindInclusionGroup2Set(g.CodedFile, s.Intersection) {
 				//found a group and set that can be coded
 				g.Users = append(g.Users, s.Users...)
-				g.CodedFile[s.RequestFile] = true
+				g.CodedFile[s.RequestFile[0]] = true
 				g.Intersection = FindMappedIntersection(g.Intersection, s.Intersection)
-				delete(group, s.RequestFile)
+				delete(group, s.RequestFile[0])
 				break
 			}
 		}
 	}
+	//group is now the final result
+	//intersection no longer matters, just users and requestfiles
+	for _, s := range group {
+		users := s.Users
+		var codedFile []string
+		for i, k := range s.CodedFile {
+			if k {
+				codedFile = append(codedFile, i)
+			}
+		}
+		returnUser = append(returnUser, common.UserIntersection{Users: users, Intersection: []string{"hit"}, RequestFile: codedFile})
+	}
+	return returnUser
 }
 
 func FindInclusionGroup2Set(items map[string]bool, set []string) bool {
