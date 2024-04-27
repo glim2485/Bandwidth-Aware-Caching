@@ -1,9 +1,7 @@
-package lrucache
+package common
 
 import (
 	"fmt"
-	"gjlim2485/bandwidthawarecaching/latency"
-	"sync"
 )
 
 type LRUCache struct {
@@ -22,7 +20,6 @@ type Node struct {
 	next  *Node
 }
 
-var mutex sync.Mutex
 var SimulFetchingData = make(map[string]bool)
 
 func Constructor(capacity int) LRUCache {
@@ -85,7 +82,7 @@ func (this *LRUCache) PutEdge(key string, value string, size int) {
 		}
 		if didRemove {
 			//simulate retrieving data from cloud
-			latency.SimulTransferringData(size)
+			SimulTransferringData(size)
 			this.cache[key] = newNode
 			this.addToFront(newNode)
 		} else {
@@ -134,15 +131,27 @@ func (this *LRUCache) GetCacheList() []string {
 	return returnSlice
 }
 
+func (this *LRUCache) ChangeFileStatus(status bool, filename string) {
+	current := this.head
+	for current.key != filename {
+		current = current.next
+		if current.key == filename {
+			current.InUse = status
+			break
+		}
+	}
+}
+
 func (this *LRUCache) SimulCheckFetchData(filename string, size int) bool {
-	mutex.Lock()
+	MulticastMutex.Lock()
 	if SimulFetchingData[filename] {
+		MulticastMutex.Unlock()
 		return true
 	}
-	latency.SimulUpdateConcurrentConnection(1)
+	SimulUpdateConcurrentConnection(1)
 	this.PutEdge(filename, filename, size)
-	latency.SimulUpdateConcurrentConnection(-1)
+	SimulUpdateConcurrentConnection(-1)
 	SimulFetchingData[filename] = true
-	mutex.Unlock()
+	MulticastMutex.Unlock()
 	return true
 }

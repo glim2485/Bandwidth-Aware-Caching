@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/data"
-	"gjlim2485/bandwidthawarecaching/latency"
-	"gjlim2485/bandwidthawarecaching/lrucache"
 	"gjlim2485/bandwidthawarecaching/server"
 	"io"
 	"net/http"
@@ -19,7 +17,7 @@ import (
 func CreateUserThread(wg *sync.WaitGroup, userID int) {
 	defer wg.Done()
 	zipf := data.GetZipfDistribution(int64(userID)) //generate its own zipf distribution
-	cachedItems := lrucache.Constructor(common.MaxLocalCacheSize)
+	cachedItems := common.Constructor(common.MaxLocalCacheSize)
 	var logInput common.UserCacheHit
 	for i := 0; i < common.UserIteration; i++ {
 		requestData := zipf.Uint64() + 1 //to make it [0,100]
@@ -41,13 +39,14 @@ func CreateUserThread(wg *sync.WaitGroup, userID int) {
 			}
 
 			var didMulticast bool
-			if latency.ToggleMulticast {
+			if common.ToggleMulticast {
 				didMulticast = true
 			} else {
 				didMulticast = false
 			}
-			timeTaken := latency.SimulTransferringData(size)
-			latency.SimulUpdateConcurrentConnection(-connModifier) //close connection
+			timeTaken := common.SimulTransferringData(size)
+			common.SimulUpdateConcurrentConnection(-connModifier) //close connection
+			common.EdgeCache.ChangeFileStatus(false, filename)
 			cachedItems.Put(filename, filename)
 			logInput = common.UserCacheHit{ItemName: filename, CacheHit: cacheHitLocation, TimeTaken: timeTaken, Multicast: didMulticast}
 		}

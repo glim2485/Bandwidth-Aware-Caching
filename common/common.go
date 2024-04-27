@@ -1,7 +1,7 @@
 package common
 
 import (
-	"gjlim2485/bandwidthawarecaching/lrucache"
+	"sync"
 	"time"
 )
 
@@ -39,11 +39,13 @@ type CodedIntersection struct {
 	CodedFile    map[string]bool `json: codedfiles`
 }
 
-var EdgeCache lrucache.LRUCache
+var EdgeCache LRUCache
 
 var UserNumbers int = 100
 var UserRequestTicket int = 0
 var UserRequestTicketResult = make(map[int][]UserIntersection)
+var MulticastMutex sync.Mutex
+var LatencyMutex sync.Mutex
 
 var UserIteration int = 10
 var UserLogInfo = make(map[int]UserLog)

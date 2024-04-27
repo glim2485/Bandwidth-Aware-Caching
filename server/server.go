@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"gjlim2485/bandwidthawarecaching/codecache"
 	"gjlim2485/bandwidthawarecaching/common"
-	"gjlim2485/bandwidthawarecaching/latency"
-	"gjlim2485/bandwidthawarecaching/lrucache"
 	"net"
 	"strconv"
 	"time"
@@ -17,12 +15,12 @@ var SimulChan = make(chan []common.UserIntersection)
 var collectChan = make(chan common.UserData, 20)
 
 func SimulInitializeServer() {
-	common.EdgeCache = lrucache.Constructor(common.MaxEdgeCacheSize)
+	common.EdgeCache = common.Constructor(common.MaxEdgeCacheSize)
 	go SimulMulticastDataCollector()
 }
 
 func SimulIncomingData(userID int, filename string, userCache []string) (bool, int, float64) {
-	if latency.ToggleMulticast {
+	if common.ToggleMulticast {
 		collectChan <- common.UserData{UserIP: strconv.Itoa(userID), LocalCache: userCache, RequestData: filename}
 		myTicket := common.UserRequestTicket
 		//perform blocking wait
@@ -63,13 +61,13 @@ func SimulIncomingData(userID int, filename string, userCache []string) (bool, i
 		hit := common.EdgeCache.Get(filename)
 		if hit != "" {
 			//cache was hit
-			latency.SimulUpdateConcurrentConnection(1)
+			common.SimulUpdateConcurrentConnection(1)
 			return true, common.CacheDataSize, 1
 		} else {
 			//cache miss
-			latency.SimulUpdateConcurrentConnection(1) //simulate edge to cache fetch
+			common.SimulUpdateConcurrentConnection(1) //simulate edge to cache fetch
 			common.EdgeCache.PutEdge(filename, filename, common.CacheDataSize)
-			latency.SimulUpdateConcurrentConnection(-1) //undo connection
+			common.SimulUpdateConcurrentConnection(-1) //undo connection
 			return false, common.CacheDataSize, 1
 		}
 	}

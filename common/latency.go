@@ -1,4 +1,4 @@
-package latency
+package common
 
 import (
 	"math"
@@ -28,14 +28,14 @@ func SimulTransferringData(filesize int) int {
 }
 
 func SimulUpdateConcurrentConnection(amount float64) {
-	mutex.Lock()
+	LatencyMutex.Lock()
 	SimulUserConnected += amount
 	if SimulUserConnected >= 1 {
 		SplitBandwidth = TotalBandwidth / SimulUserConnected
 	} else {
 		SplitBandwidth = TotalBandwidth
 	}
-	mutex.Unlock()
+	LatencyMutex.Unlock()
 }
 
 func CalculateExpectedTime(bandwidth int, datasize int) float64 {
