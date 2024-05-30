@@ -2,138 +2,180 @@ package server
 
 import (
 	"fmt"
-	"gjlim2485/bandwidthawarecaching/codecache"
 	"gjlim2485/bandwidthawarecaching/common"
-	"net"
-	"strconv"
+	"gjlim2485/bandwidthawarecaching/lru"
+	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-var SimulChan = make(chan []common.UserIntersection)
-var collectChan = make(chan common.UserData, 20)
+var transitDataCapacity int = 10
+var transitDataList = make(map[string]int)
+var concurrentConnection int = 0
+var concurrentConnectionLock sync.Mutex
+var bandwidthPerConnection float64 = common.MaxBandwidth
+var bandwidthLock sync.RWMutex
+var multicastNeeded bool = false
+var udpAnnounceChannel = make(map[int]chan string)
+var announceChannelLock sync.Mutex
+var incomingData = make(chan common.UserRequest, 30)
+var edgeCache lru.LRUCache
+var edgeCacheLock sync.Mutex
+var swapItem = make(map[string]swapItemStruct)
+var swapItemLock sync.Mutex
 
-func SimulInitializeServer() {
-	common.EdgeCache = common.Constructor(common.MaxEdgeCacheSize)
-	go SimulMulticastDataCollector()
+type swapItemStruct struct {
+	fullyCached bool
+	inTransit   bool
+	waitingSwap bool
 }
 
-func SimulIncomingData(userID int, filename string, userCache []string) (bool, int, float64) {
-	if common.ToggleMulticast {
-		collectChan <- common.UserData{UserIP: strconv.Itoa(userID), LocalCache: userCache, RequestData: filename}
-		myTicket := common.UserRequestTicket
-		//perform blocking wait
-		for common.UserRequestTicketResult[myTicket] == nil {
-			//wait for the data to come back
+// start server
+func SimulStartServer(cacheSize int) {
+	edgeCache = lru.Constructor(cacheSize)
+	go dataCollector()
+	router := gin.Default()
+	router.Run(fmt.Sprintf("%s:%s", common.ServerIP, common.ServerPort))
+	router.POST("/getdata", receiveRequest)
+}
+
+// this should be done as a SINGULAR go routine
+func dataCollector() {
+	ticker := time.NewTicker(multicastWaitTime)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			//use collectedData
+			copiedData := make([]common.UserRequest, len(collectedData))
+			copy(copiedData, collectedData)
+			//make sure to pass by value
+			go handleData(copiedData, currUDPPort)
+			//reset collectedData
+			collectedData = make([]common.UserRequest, 0)
+		case data := <-incomingData:
+			collectedData = append(collectedData, data)
 		}
-		var result = common.UserRequestTicketResult[myTicket]
-		if !common.EnableCodeCache {
-			//no code cache, so no mulple requests
-			for _, s := range result {
-				if s.RequestFile[0] == filename {
-					if common.EdgeCache.Get(filename) != "" {
-						//cache was hit
-						return true, common.CacheDataSize, (float64(1) / float64(len(s.Users)))
-					} else {
-						//cache miss
-						common.EdgeCache.SimulCheckFetchData(filename, common.CacheDataSize) //this blocks all processes until the data is fetched
-						return false, common.CacheDataSize, (float64(1) / float64(len(s.Users)))
-					}
-				}
-			}
+	}
+}
+
+func updateConcurrentConnection(amount int) {
+	defer concurrentConnectionLock.Unlock()
+	concurrentConnectionLock.Lock()
+	concurrentConnection += amount
+	updateBandwidthPerConnection()
+}
+
+func updateBandwidthPerConnection() {
+	defer bandwidthLock.Unlock()
+	bandwidthLock.Lock()
+	if concurrentConnection == 0 {
+		bandwidthPerConnection = common.MaxBandwidth
+	} else {
+		bandwidthPerConnection = common.MaxBandwidth / float64(concurrentConnection)
+		//update multicast needed
+		if bandwidthPerConnection < 0.2*common.MaxBandwidth {
+			multicastNeeded = true
 		} else {
-			//code cache enabled
-			for _, s := range result {
-				if common.StringinSlice(filename, s.RequestFile) {
-					if s.Intersection[0] == "miss" {
-						common.EdgeCache.SimulCheckFetchData(filename, common.CacheDataSize)
-						return false, common.CacheDataSize, (float64(1) / float64(len(s.Users)))
-					} else {
-						common.EdgeCache.Get(filename) //this is done to refresh cache
-						return true, common.CacheDataSize, (float64(1) / float64(len(s.Users)))
-					}
-				}
+			multicastNeeded = false
+		}
+	}
+}
+
+// all apicalls
+func simulSendData(numconn int) {
+	currentSent := float64(0)
+	updateConcurrentConnection(numconn)
+	for currentSent < common.DataSize {
+		bandwidthLock.RLock()
+		currentSent += bandwidthPerConnection
+		bandwidthLock.RUnlock()
+		time.Sleep(1 * time.Second)
+	}
+	updateConcurrentConnection(-numconn)
+}
+
+func receiveRequest(c *gin.Context) {
+	var userData common.UserRequest
+	if err := c.BindJSON(&userData); err != nil {
+		return
+	}
+	if !common.EnableMulticast {
+		if multicastNeeded {
+			incomingData <- userData
+			userPort := fetchUDPPort(userData.UserID)
+			response := gin.H{
+				"UDPPort": userPort,
+				"status":  "change to Multicast",
 			}
+			c.JSON(333, response)
+		} else {
+			sendUnicastData(userData.RequestFile, c)
 		}
 	} else {
-		//unicast scenario
-		hit := common.EdgeCache.Get(filename)
-		if hit != "" {
-			//cache was hit
-			common.SimulUpdateConcurrentConnection(1)
-			return true, common.CacheDataSize, 1
-		} else {
-			//cache miss
-			common.SimulUpdateConcurrentConnection(1) //simulate edge to cache fetch
-			common.EdgeCache.PutEdge(filename, filename, common.CacheDataSize)
-			common.SimulUpdateConcurrentConnection(-1) //undo connection
-			return false, common.CacheDataSize, 1
-		}
+		simulSendData(1)
+		c.Status(http.StatusOK)
 	}
-	//error
-	return false, 0, 0
 }
 
-func SimulMulticastDataCollector() {
-	timer := time.NewTicker(time.Duration(common.MulticastWaitTime) * time.Millisecond)
-	var collectedData []common.UserData
-	for {
-		select {
-		case <-timer.C:
-			//keep emptying the channel
-			for len(collectChan) > 0 {
-				incomingData := <-collectChan
-				collectedData = append(collectedData, incomingData)
+func fetchUDPPort(userid int) string {
+	udpAnnounceChannel[userid] = make(chan string)
+	returnPort := <-udpAnnounceChannel[userid]
+	announceChannelLock.Lock()
+	defer announceChannelLock.Unlock()
+	close(udpAnnounceChannel[userid])
+	delete(udpAnnounceChannel, userid)
+	return returnPort
+}
+
+func sendUnicastData(requestFile string, c *gin.Context) {
+	edgeCacheLock.Lock()
+	exists, _ := edgeCache.Get(requestFile, true)
+	if exists {
+		//exists in cache, http 200 for hit
+		edgeCacheLock.Unlock()
+		simulSendData(1)
+		edgeCacheLock.Lock()
+		edgeCache.UpdateNode(requestFile, false)
+		edgeCacheLock.Unlock()
+		c.Status(http.StatusOK)
+	} else {
+		//does not exist cache, check swap
+		edgeCacheLock.Unlock()
+		swapCacheAndSwap(requestFile, c)
+	}
+}
+
+func swapCacheAndSwap(requestFile string, c *gin.Context) {
+	if _, exists := swapItem[requestFile]; exists {
+
+		canSwap := false
+		//wait until a cache is stop being used to be swapped
+		for !canSwap {
+			time.Sleep(2 * time.Second)
+			edgeCacheLock.Lock()
+			swapItemLock.Lock()
+			canSwap = edgeCache.Put(requestFile, true)
+			if canSwap {
+				delete(swapItem, requestFile)
+				swapItem[requestFile] = true
 			}
-		default:
-			//do something with said data
-			copiedData := make([]common.UserData, len(collectedData))
-			copy(copiedData, collectedData)
-			go codecache.MakeGroups(copiedData)
-			common.UserRequestTicket++
-			collectedData = nil
+			swapItemLock.Unlock()
+			edgeCacheLock.Unlock()
 		}
-	}
+		simulSendData(1)
+		edgeCacheLock.Lock()
+		edgeCache.UpdateNode(requestFile, false)
+		edgeCacheLock.Unlock()
+		//exists in swap, http 335 for swap
+		c.Status(335)
+	} else {
+		//does not exist in swap
 
-}
-
-func HTTPServer() {
-	router := gin.Default()
-
-	if err := router.Run(common.ServerPort); err != nil {
-		fmt.Println("Error starting HTTP server")
-		return
-	}
-
-	router.Run("0.0.0.0:8080")
-
-}
-
-func MulticastServer(portNumber int) {
-	conn, err := net.DialUDP("udp", nil, &net.UDPAddr{
-		IP:   net.ParseIP(common.MulticastIP),
-		Port: portNumber,
-	})
-	if err != nil {
-		fmt.Println("Error creating UDP connection:", err)
-		return
-	}
-	defer conn.Close()
-}
-
-func CollectData() {
-	var dataCollection []common.UserData
-	for {
-		select {
-		case <-common.GlobalTimer.C:
-			if len(dataCollection) != 0 {
-				//check for relations
-			}
-			dataCollection = nil //reset the
-		default:
-			incomingData := <-common.UserDataChannel
-			dataCollection = append(dataCollection, incomingData)
-		}
+		edgeCacheLock.Lock()
+		edgeCache.Put(requestFile, true)
+		edgeCacheLock.Unlock()
 	}
 }
