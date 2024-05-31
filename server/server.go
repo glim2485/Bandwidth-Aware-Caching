@@ -11,8 +11,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var transitDataCapacity int = 10
-var transitDataList = make(map[string]int)
 var concurrentConnection int = 0
 var concurrentConnectionLock sync.Mutex
 var bandwidthPerConnection float64 = common.MaxBandwidth
@@ -24,21 +22,23 @@ var incomingData = make(chan common.UserRequest, 30)
 var edgeCache lru.LRUCache
 var edgeCacheLock sync.Mutex
 var swapItem = make(map[string]swapItemStruct)
+var swapItemCapacity int = common.SwapItemSize
 var swapItemLock sync.Mutex
 
 type swapItemStruct struct {
-	fullyCached bool
-	inTransit   bool
-	waitingSwap bool
+	fullyCached bool //the entire file exists in the server now
+	inTransit   bool //file was called and is being sent to the edge for caching then to user
+	waitingSwap bool //all cache is full and is waiting to be swapped
 }
 
 // start server
-func SimulStartServer(cacheSize int) {
-	edgeCache = lru.Constructor(cacheSize)
+func SimulStartServer() {
+	edgeCache = lru.Constructor(common.EdgeCacheSize)
 	go dataCollector()
 	router := gin.Default()
-	router.Run(fmt.Sprintf("%s:%s", common.ServerIP, common.ServerPort))
+
 	router.POST("/getdata", receiveRequest)
+	router.Run(fmt.Sprintf("%s:%s", common.ServerIP, common.ServerPort))
 }
 
 // this should be done as a SINGULAR go routine
@@ -62,15 +62,15 @@ func dataCollector() {
 }
 
 func updateConcurrentConnection(amount int) {
-	defer concurrentConnectionLock.Unlock()
 	concurrentConnectionLock.Lock()
+	defer concurrentConnectionLock.Unlock()
 	concurrentConnection += amount
 	updateBandwidthPerConnection()
 }
 
 func updateBandwidthPerConnection() {
-	defer bandwidthLock.Unlock()
 	bandwidthLock.Lock()
+	defer bandwidthLock.Unlock()
 	if concurrentConnection == 0 {
 		bandwidthPerConnection = common.MaxBandwidth
 	} else {
@@ -97,6 +97,39 @@ func simulSendData(numconn int) {
 	updateConcurrentConnection(-numconn)
 }
 
+// to be used for cloud -> edge
+func simulFetchData(requestFile string, c *gin.Context) {
+	currentReceived := float64(0)
+	updateConcurrentConnection(1)
+	for currentReceived < common.DataSize {
+		bandwidthLock.RLock()
+		currentReceived += bandwidthPerConnection
+		bandwidthLock.RUnlock()
+		time.Sleep(1 * time.Second)
+	}
+	updateConcurrentConnection(-1)
+	canSwap := false
+	//wait until a cache is stop being used to be swapped
+	for !canSwap {
+		time.Sleep(2 * time.Second)
+		edgeCacheLock.Lock()
+		swapItemLock.Lock()
+		canSwap, removedItem := edgeCache.Put(requestFile, true)
+		if canSwap {
+			delete(swapItem, requestFile)
+			newItem := swapItemStruct{fullyCached: true, inTransit: true, waitingSwap: true}
+			swapItem[removedItem] = newItem
+		}
+		swapItemLock.Unlock()
+		edgeCacheLock.Unlock()
+	}
+	simulSendData(1)
+	edgeCacheLock.Lock()
+	edgeCache.UpdateNode(requestFile, false)
+	edgeCacheLock.Unlock()
+	c.Status(336)
+}
+
 func receiveRequest(c *gin.Context) {
 	var userData common.UserRequest
 	if err := c.BindJSON(&userData); err != nil {
@@ -104,6 +137,7 @@ func receiveRequest(c *gin.Context) {
 	}
 	if !common.EnableMulticast {
 		if multicastNeeded {
+			//multicast data
 			incomingData <- userData
 			userPort := fetchUDPPort(userData.UserID)
 			response := gin.H{
@@ -149,18 +183,23 @@ func sendUnicastData(requestFile string, c *gin.Context) {
 }
 
 func swapCacheAndSwap(requestFile string, c *gin.Context) {
+	swapItemLock.Lock()
 	if _, exists := swapItem[requestFile]; exists {
-
+		swap := swapItem[requestFile]
+		swap.waitingSwap = true
+		swapItem[requestFile] = swap
+		swapItemLock.Unlock()
 		canSwap := false
 		//wait until a cache is stop being used to be swapped
 		for !canSwap {
 			time.Sleep(2 * time.Second)
 			edgeCacheLock.Lock()
 			swapItemLock.Lock()
-			canSwap = edgeCache.Put(requestFile, true)
+			canSwap, removedItem := edgeCache.Put(requestFile, true)
 			if canSwap {
 				delete(swapItem, requestFile)
-				swapItem[requestFile] = true
+				newItem := swapItemStruct{fullyCached: true, inTransit: true, waitingSwap: true}
+				swapItem[removedItem] = newItem
 			}
 			swapItemLock.Unlock()
 			edgeCacheLock.Unlock()
@@ -172,10 +211,38 @@ func swapCacheAndSwap(requestFile string, c *gin.Context) {
 		//exists in swap, http 335 for swap
 		c.Status(335)
 	} else {
-		//does not exist in swap
-
-		edgeCacheLock.Lock()
-		edgeCache.Put(requestFile, true)
-		edgeCacheLock.Unlock()
+		//does not exist in swap nor in cache
+		if len(swapItem) >= swapItemCapacity {
+			newItem := swapItemStruct{fullyCached: false, inTransit: true, waitingSwap: true}
+			swapItem[requestFile] = newItem
+			go simulFetchData(requestFile, c)
+			swapItemLock.Unlock()
+			return
+		}
+		removeItem := checkSwapItem()
+		//if there is a replacement item, remove it and add the new item
+		if removeItem != "none" {
+			delete(swapItem, removeItem)
+			newItem := swapItemStruct{fullyCached: false, inTransit: true, waitingSwap: true}
+			swapItem[requestFile] = newItem
+			//simulate fetching data from cloud and swapping
+			go simulFetchData(requestFile, c)
+		} else {
+			//no target at all, client needs to do a direct fetch to cloud
+			c.Status(334)
+		}
+		swapItemLock.Unlock()
 	}
+}
+
+func checkSwapItem() string {
+	for x := range swapItem {
+		//if there exists a swap item that is not in transit and not waiting to be swapped
+		//replace that one
+		if !swapItem[x].waitingSwap && !swapItem[x].inTransit {
+			return x
+		}
+	}
+	// all swap items are in transit or waiting to be swapped
+	return "none"
 }

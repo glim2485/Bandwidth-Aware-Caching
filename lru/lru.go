@@ -48,24 +48,25 @@ func (c *LRUCache) UpdateNode(key string, status bool) {
 		node.InUse = status
 	}
 }
-func (c *LRUCache) Put(key string, status bool) bool {
+func (c *LRUCache) Put(key string, status bool) (bool, string) {
+	deletedKey := "none"
 	if node, ok := c.cache[key]; ok {
 		c.moveToFront(node)
-		return true
+		return true, "none"
 	} else {
 		newNode := &Node{key: key, InUse: status}
 		if len(c.cache) >= c.capacity {
-			deletedKey := c.deleteNode(c.tail)
+			deletedKey = c.deleteNode(c.tail)
 			if deletedKey == "none" {
 				fmt.Println("all cache in use, go contact cloud")
-				return false
+				return false, "none"
 			}
 			delete(c.cache, deletedKey)
 		}
 		c.cache[key] = newNode
 		c.addToFront(newNode)
 	}
-	return true
+	return true, deletedKey
 }
 
 func (c *LRUCache) moveToFront(node *Node) {

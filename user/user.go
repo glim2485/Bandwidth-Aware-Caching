@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 )
 
 type serverResponse struct {
@@ -18,7 +19,8 @@ type serverResponse struct {
 	StatusMessage string `json:"StatusMessage"`
 }
 
-func SimulUserRequests(userid int, iteration int, cacheSize int) {
+func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGroup) {
+	defer wg.Done()
 	//set its port to be 40000 + userid
 	ownPort := strconv.Itoa(40000 + userid)
 	//all user cache inuse is set to false for experiment's sake
@@ -74,6 +76,8 @@ func SimulUserRequests(userid int, iteration int, cacheSize int) {
 	}
 }
 
+// case 335: was swapped with swapped item
+// case 336: cache needs to be fetched from cloud, in-transit
 func generateRequestFile() string {
 	return "file" + strconv.Itoa(rand.Intn(50)+1)
 }
