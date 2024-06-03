@@ -11,7 +11,7 @@ type LRUCache struct {
 
 type Node struct {
 	key   string
-	InUse bool
+	InUse int
 	prev  *Node
 	next  *Node
 }
@@ -29,9 +29,9 @@ func Constructor(capacity int) LRUCache {
 // gets a key from the current LRUcache
 // returns true and the value of the key if it exists
 // returns false and "none" if it does not
-func (c *LRUCache) Get(key string, status bool) (bool, string) {
+func (c *LRUCache) Get(key string, count int) (bool, string) {
 	if node, ok := c.cache[key]; ok {
-		node.InUse = status
+		node.InUse = node.InUse + count
 		c.moveToFront(node)
 		return true, node.key
 	}
@@ -43,30 +43,33 @@ func (c *LRUCache) Get(key string, status bool) (bool, string) {
 // if it is full, it deletes the least recently used key
 // USED BY USERS
 
-func (c *LRUCache) UpdateNode(key string, status bool) {
+func (c *LRUCache) UpdateNode(key string, count int) {
 	if node, ok := c.cache[key]; ok {
-		node.InUse = status
+		node.InUse = node.InUse + count
 	}
 }
-func (c *LRUCache) Put(key string, status bool) (bool, string) {
+func (c *LRUCache) Put(key string, count int) (bool, string) {
 	deletedKey := "none"
 	if node, ok := c.cache[key]; ok {
 		c.moveToFront(node)
-		return true, "none"
+		return false, "alreadyExists"
 	} else {
-		newNode := &Node{key: key, InUse: status}
+		newNode := &Node{key: key, InUse: count}
 		if len(c.cache) >= c.capacity {
+			//cache full needs deletion
 			deletedKey = c.deleteNode(c.tail)
 			if deletedKey == "none" {
+				//can't delete anything
 				fmt.Println("all cache in use, go contact cloud")
 				return false, "none"
 			}
+			//can delete and add
 			delete(c.cache, deletedKey)
 		}
 		c.cache[key] = newNode
 		c.addToFront(newNode)
+		return true, deletedKey
 	}
-	return true, deletedKey
 }
 
 func (c *LRUCache) moveToFront(node *Node) {
@@ -90,7 +93,7 @@ func (c *LRUCache) removeNode(node *Node) {
 }
 
 func (c *LRUCache) deleteNode(node *Node) string {
-	for node.InUse {
+	for node.InUse >= 1 {
 		node = node.prev
 		if c.head == node {
 			return "none"

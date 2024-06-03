@@ -16,11 +16,12 @@ var cloudBandwidthLock sync.RWMutex
 
 func SimulStartCloud() {
 	router := gin.Default()
-	router.POST("/getdata", simulCloudSendData)
 	router.Run(fmt.Sprintf("%s:%s", common.ServerIP, common.CloudPort))
+	router.POST("/getdata", simulCloudSendData)
 }
 
 func simulCloudSendData(c *gin.Context) {
+	fmt.Println("Cloud: received fetch from user")
 	currentSent := float64(0)
 	cloudUpdateConcurrentConnection(1)
 	for currentSent < common.DataSize {

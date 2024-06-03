@@ -34,14 +34,12 @@ func handleData(userData []common.UserRequest, port int) {
 	multicastGroups := MulticastGroup(userData)
 
 	//if no code cache is needed
-	if !common.EnableMulticast {
+	if !common.EnableCodeCache {
 		for filename, x := range multicastGroups {
 			go multicastData(x.userID, filename, x.multicastPort)
 		}
-		return
 	}
-	//do code cache if necessary
-	//send data in multicast
+	//missing code cache condition
 }
 
 func MulticastGroup(userData []common.UserRequest) map[string]multicastGroup {

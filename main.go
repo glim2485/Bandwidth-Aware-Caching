@@ -5,6 +5,9 @@ import (
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/server"
 	"gjlim2485/bandwidthawarecaching/user"
+	"log"
+	"net/http"
+	_ "net/http/pprof" // Import the pprof package
 	"sync"
 	"time"
 
@@ -12,6 +15,9 @@ import (
 )
 
 func main() {
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 	go server.SimulStartServer()
 	go server.SimulStartCloud()
 	var wg sync.WaitGroup
@@ -19,12 +25,12 @@ func main() {
 	startTime := time.Now()
 	for i := 0; i < common.UserCount; i++ {
 		wg.Add(1)
-		user.SimulUserRequests(i+1, common.UserIterations, common.UserCacheSize, &wg)
+		go user.SimulUserRequests(i+1, common.UserIterations, common.UserCacheSize, &wg)
 	}
 	wg.Wait()
 	endTime := time.Now()
 	//log data to excel sheet
-	f, err := excelize.OpenFile("dataLog.xlsx")
+	f, err := excelize.OpenFile("/home/dnclab/Bandwidth-Aware-Caching/dataLog.xlsx")
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -36,9 +42,12 @@ func main() {
 	totalTime := endTime.Sub(startTime)
 	year, month, day := startTime.Date()
 	hour, minute := startTime.Hour(), startTime.Minute()
-	sheetName := fmt.Sprintf("%d-%d-%d %d:%d", year, month, day, hour, minute)
+	sheetName := fmt.Sprintf("%d_%d_%d %d_%d", year, month, day, hour, minute)
 
-	index, _ := f.NewSheet(sheetName)
+	index, err := f.NewSheet(sheetName)
+	if err != nil {
+		fmt.Println(err)
+	}
 	f.SetCellValue(sheetName, "A1", "UserCacheSize")
 	f.SetCellValue(sheetName, "B1", fmt.Sprintf("%d", common.UserCacheSize))
 	f.SetCellValue(sheetName, "A2", "edgeCacheSize")
@@ -81,4 +90,5 @@ func main() {
 	if err = f.Save(); err != nil {
 		fmt.Println(err)
 	}
+	fmt.Println("simulation finished and logged to dataLog.xlsx")
 }

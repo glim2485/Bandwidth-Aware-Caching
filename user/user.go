@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 )
 
 type serverResponse struct {
@@ -20,6 +21,7 @@ type serverResponse struct {
 }
 
 func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGroup) {
+	fmt.Println("User", userid, "started")
 	defer wg.Done()
 	//set its port to be 40000 + userid
 	ownPort := strconv.Itoa(40000 + userid)
@@ -38,22 +40,21 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 			fmt.Println("Error marshalling JSON:", err)
 			return
 		}
-
+		startTime := time.Now()
 		url := "http://" + common.ServerIP + ":" + common.ServerPort + "/getdata"
 		body := bytes.NewBuffer(jsonData)
+		fmt.Println("User", userid, "requesting", userRequest, "from server")
 		resp, err := http.Post(url, "application/json", body)
 		if err != nil {
 			fmt.Println("Error sending request:", err)
 			return
 		}
 		defer resp.Body.Close()
-
+		fmt.Println(common.FetchType[resp.StatusCode])
 		switch resp.StatusCode {
 		case 200:
-			fmt.Println("Request successful")
-			userCache.Put(userRequest, false)
+			userCache.Put(userRequest, 0)
 		case 333:
-			fmt.Println("change to multicast")
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				fmt.Println("Error reading response body:", err)
@@ -66,14 +67,36 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 				return
 			}
 			if joinMulticast(response.Port, ownPort) {
-				userCache.Put(userRequest, false)
+				userCache.Put(userRequest, 0)
 			} else {
 				fmt.Println("Error joining multicast group")
 			}
 		case 334:
-			fmt.Println("direct fetch from cloud")
+			cloudUrl := "http://" + common.ServerIP + ":" + common.CloudPort + "/getdata"
+			body := bytes.NewBuffer(jsonData)
+			resp, err := http.Post(cloudUrl, "application/json", body)
+			if err != nil {
+				fmt.Println("Error sending request:", err)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == 200 {
+				fmt.Println("Cloud fetch successful")
+			}
 		}
+		totalTime := int(time.Since(startTime) / time.Millisecond)
+		newLog := common.UserDataLogStruct{
+			UserID:      userid,
+			RequestFile: userRequest,
+			ReturnCode:  resp.StatusCode,
+			FetchType:   common.FetchType[resp.StatusCode],
+			TimeTaken:   totalTime,
+		}
+		common.UserDataLogLock.Lock()
+		common.UserDataLog = append(common.UserDataLog, newLog)
+		common.UserDataLogLock.Unlock()
 	}
+	fmt.Println("User", userid, "finished")
 }
 
 // case 335: was swapped with swapped item

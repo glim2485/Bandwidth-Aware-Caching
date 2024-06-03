@@ -1,6 +1,8 @@
 package common
 
-var UserCount int = 10
+import "sync"
+
+var UserCount int = 3
 var UserIterations int = 100
 var EnableMulticast bool = false
 var EnableCodeCache bool = false
@@ -9,7 +11,7 @@ var ServerIP string = "localhost"
 var MulticastIP string = "224.0.1.10"
 var ServerPort string = "8080"
 var CloudPort string = "55555"
-var DataSize float64 = 1000 // MB aka 1GB
+var DataSize float64 = 100 // MB aka 1GB
 var SwapItemSize int = 10
 var UserCacheSize int = 50
 var EdgeCacheSize int = UserCacheSize * 10
@@ -23,6 +25,7 @@ type UserRequest struct {
 
 // for logging purposes
 var UserDataLog []UserDataLogStruct
+var UserDataLogLock sync.Mutex
 
 type UserDataLogStruct struct {
 	UserID      int    `json:"UserID"`
@@ -38,4 +41,6 @@ var FetchType = map[int]string{
 	334: "Cloud",
 	335: "Swap",
 	336: "In-Transit",
+	337: "Cloud and swap",
+	338: "Another one was fetching first",
 }
