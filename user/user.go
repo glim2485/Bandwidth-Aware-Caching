@@ -16,7 +16,8 @@ import (
 )
 
 type serverResponse struct {
-	Port          string `json:"Port"`
+	UserPort      string `json:"UserPort"`
+	ServerPort    string `json:"ServerPort"`
 	StatusMessage string `json:"StatusMessage"`
 }
 
@@ -35,6 +36,11 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 			RequestFile: userRequest,
 			UserFile:    userFiles,
 		}
+		//debug
+		//fmt.Println("User", userid, "cache list:", userFiles, "and size is", unsafe.Sizeof(userFiles), "bytes")
+		//fmt.Println("User", userid, "cache size is", unsafe.Sizeof(userCache), "bytes")
+		//debug
+		userFiles = nil
 		jsonData, err := json.Marshal(requestMessage)
 		if err != nil {
 			fmt.Println("Error marshalling JSON:", err)
@@ -43,33 +49,33 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 		startTime := time.Now()
 		url := "http://" + common.ServerIP + ":" + common.ServerPort + "/getdata"
 		body := bytes.NewBuffer(jsonData)
-		fmt.Println("User", userid, "requesting", userRequest, "from server")
+		//fmt.Println("User", userid, "requesting", userRequest, "from server")
 		resp, err := http.Post(url, "application/json", body)
 		if err != nil {
 			fmt.Println("Error sending request:", err)
 			return
 		}
 		defer resp.Body.Close()
-		fmt.Println(common.FetchType[resp.StatusCode])
+		//fmt.Println(common.FetchType[resp.StatusCode])
 		switch resp.StatusCode {
 		case 200:
 			userCache.Put(userRequest, 0)
 		case 333:
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
-				fmt.Println("Error reading response body:", err)
+				//fmt.Println("Error reading response body:", err)
 				return
 			}
 			var response serverResponse
 			err = json.Unmarshal(body, &response)
 			if err != nil {
-				fmt.Println("Error unmarshalling JSON:", err)
+				//fmt.Println("Error unmarshalling JSON:", err)
 				return
 			}
-			if joinMulticast(response.Port, ownPort) {
+			if joinMulticast(response.UserPort, response.ServerPort, ownPort) {
 				userCache.Put(userRequest, 0)
 			} else {
-				fmt.Println("Error joining multicast group")
+				//fmt.Println("Error joining multicast group")
 			}
 		case 334:
 			cloudUrl := "http://" + common.ServerIP + ":" + common.CloudPort + "/getdata"
@@ -85,16 +91,16 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 			}
 		}
 		totalTime := int(time.Since(startTime) / time.Millisecond)
-		newLog := common.UserDataLogStruct{
+		common.UserDataLogLock.Lock()
+		common.UserDataLog = append(common.UserDataLog, common.UserDataLogStruct{
 			UserID:      userid,
 			RequestFile: userRequest,
 			ReturnCode:  resp.StatusCode,
 			FetchType:   common.FetchType[resp.StatusCode],
 			TimeTaken:   totalTime,
-		}
-		common.UserDataLogLock.Lock()
-		common.UserDataLog = append(common.UserDataLog, newLog)
+		})
 		common.UserDataLogLock.Unlock()
+		//fmt.Println("User", userid, " current cache size:", userCache.GetLength())
 	}
 	fmt.Println("User", userid, "finished")
 }
@@ -105,15 +111,15 @@ func generateRequestFile() string {
 	return "file" + strconv.Itoa(rand.Intn(50)+1)
 }
 
-func joinMulticast(port string, ownPort string) bool {
+func joinMulticast(userPort string, serverPort string, ownPort string) bool {
 	// Resolve addresses
-	serverAddr, err := net.ResolveUDPAddr("udp", common.ServerIP+":"+common.ServerPort)
+	serverAddr, err := net.ResolveUDPAddr("udp", common.ServerIP+":"+serverPort)
 	if err != nil {
 		fmt.Println("Error resolving server address:", err)
 		return false
 	}
 
-	clientAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%s", ownPort))
+	clientAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+ownPort)
 	if err != nil {
 		fmt.Println("Error resolving client address:", err)
 		return false
@@ -135,7 +141,7 @@ func joinMulticast(port string, ownPort string) bool {
 	}
 
 	// Join multicast group to receive video stream
-	multicastAddr, err := net.ResolveUDPAddr("udp", common.MulticastIP+":"+port)
+	multicastAddr, err := net.ResolveUDPAddr("udp", common.MulticastIP+":"+userPort)
 	if err != nil {
 		fmt.Println("Error resolving multicast address:", err)
 		return false

@@ -10,14 +10,15 @@ import (
 )
 
 var collectedData = make([]common.UserRequest, 0)
-var currUDPPort = 40000
+var currUDPPort = 50000
 var UDPlock sync.RWMutex
 var multicastWaitTime = time.Duration(3) * time.Second
 
 type multicastGroup struct {
-	userID        []int
-	intersection  []string
-	multicastPort string
+	userID              []int
+	intersection        []string
+	multicastPortUser   string
+	multicastPortServer string
 }
 
 func progressUDPPort() {
@@ -36,7 +37,7 @@ func handleData(userData []common.UserRequest, port int) {
 	//if no code cache is needed
 	if !common.EnableCodeCache {
 		for filename, x := range multicastGroups {
-			go multicastData(x.userID, filename, x.multicastPort)
+			go multicastData(x.userID, filename, x.multicastPortUser, x.multicastPortServer)
 		}
 	}
 	//missing code cache condition
@@ -54,9 +55,13 @@ func MulticastGroup(userData []common.UserRequest) map[string]multicastGroup {
 				returnGroup[x.RequestFile] = group
 			} else {
 				progressUDPPort()
+				multicastUser := fmt.Sprintf("%d", currUDPPort)
+				progressUDPPort()
+				multicastServer := fmt.Sprintf("%d", currUDPPort)
 				returnGroup[x.RequestFile] = multicastGroup{
-					userID:        []int{x.UserID},
-					multicastPort: fmt.Sprintf("%d", currUDPPort),
+					userID:              []int{x.UserID},
+					multicastPortUser:   multicastUser,
+					multicastPortServer: multicastServer,
 				}
 			}
 		}
@@ -102,15 +107,17 @@ func getIntersection(setA []string, setB []string) []string {
 }
 
 // made differently due to simulator
-func multicastData(users []int, file string, port string) {
+func multicastData(users []int, file string, userPort string, serverPort string) {
 	//spread port for users
+	// userPort is the port the users are going to connect to RECEIVE data
 	for _, x := range users {
-		udpAnnounceChannel[x] <- port
+		udpAnnounceChannel[x] <- [2]string{userPort, serverPort}
 	}
 
 	readyChan := make(chan string, len(users))
 	var wg sync.WaitGroup
-	serverAddr, err := net.ResolveUDPAddr("udp", common.ServerIP+":"+common.ServerPort)
+	//serverPort is used for the server to receive data
+	serverAddr, err := net.ResolveUDPAddr("udp", common.ServerIP+":"+serverPort)
 	if err != nil {
 		fmt.Println("error creating multicast address")
 		os.Exit(1)
@@ -152,7 +159,7 @@ func multicastData(users []int, file string, port string) {
 	}
 
 	//multicast the data now
-	multicastAddr := common.MulticastIP + ":" + port
+	multicastAddr := common.MulticastIP + ":" + userPort
 	addr, err := net.ResolveUDPAddr("udp", multicastAddr)
 	if err != nil {
 		fmt.Println("error creating multicast address")

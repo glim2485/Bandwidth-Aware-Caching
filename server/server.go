@@ -16,7 +16,7 @@ var concurrentConnectionLock sync.Mutex
 var bandwidthPerConnection float64 = common.MaxBandwidth
 var bandwidthLock sync.RWMutex
 var multicastNeeded bool = false
-var udpAnnounceChannel = make(map[int]chan string)
+var udpAnnounceChannel = make(map[int]chan [2]string)
 var announceChannelLock sync.Mutex
 var incomingData = make(chan common.UserRequest, 30)
 var edgeCache lru.LRUCache
@@ -57,7 +57,8 @@ func dataCollector() {
 			//make sure to pass by value
 			go handleData(copiedData, currUDPPort)
 			//reset collectedData
-			collectedData = collectedData[:0]
+			collectedData = nil
+			copiedData = nil
 		case data := <-incomingData:
 			collectedData = append(collectedData, data)
 		}
@@ -95,7 +96,7 @@ func simulSendData(numconn int) {
 		bandwidthLock.RLock()
 		currentSent += bandwidthPerConnection
 		bandwidthLock.RUnlock()
-		fmt.Println("Server: Sending data to some client progress ", currentSent, "/", common.DataSize)
+		//fmt.Println("Server: Sending data to some client progress ", currentSent, "/", common.DataSize)
 		time.Sleep(1 * time.Second)
 	}
 	updateConcurrentConnection(-numconn)
@@ -103,7 +104,7 @@ func simulSendData(numconn int) {
 
 // to be used for cloud -> edge
 func simulFetchData(requestFile string, c *gin.Context, returnCode int) {
-	fmt.Println("Server: Fetching data from cloud for", requestFile)
+	//fmt.Println("Server: Fetching data from cloud for", requestFile)
 	currentReceived := float64(0)
 	updateConcurrentConnection(1)
 	for currentReceived < common.DataSize {
@@ -111,13 +112,13 @@ func simulFetchData(requestFile string, c *gin.Context, returnCode int) {
 		currentReceived += bandwidthPerConnection
 		bandwidthLock.RUnlock()
 		time.Sleep(1 * time.Second)
-		fmt.Println("Server:", requestFile, "progress:", currentReceived, "/", common.DataSize)
+		//fmt.Println("Server:", requestFile, "progress:", currentReceived, "/", common.DataSize)
 	}
 	updateConcurrentConnection(-1)
-	fmt.Println("Server: Data fetched from cloud for", requestFile)
+	//fmt.Println("Server: Data fetched from cloud for", requestFile)
 	canSwap := false
 	//wait until a cache is stop being used to be swapped
-	fmt.Println("Server: checking for suitable cache replacement")
+	//fmt.Println("Server: checking for suitable cache replacement")
 	var removedItem string
 	for !canSwap {
 		//TODO: for some reason, this loop is not exiting
@@ -126,18 +127,18 @@ func simulFetchData(requestFile string, c *gin.Context, returnCode int) {
 		canSwap, removedItem = edgeCache.Put(requestFile, 1)
 		if canSwap {
 			if removedItem == "none" {
-				fmt.Println("Server: added to cache", requestFile, "Can swap:", canSwap)
+				//fmt.Println("Server: added to cache", requestFile, "Can swap:", canSwap)
 			} else {
 				delete(swapItem, requestFile)
 				newItem := swapItemStruct{fullyCached: true, inTransit: false, waitingSwap: false}
 				swapItem[removedItem] = newItem
-				fmt.Println("Server: cache replacement", removedItem, "for", requestFile, "Can swap:", canSwap)
+				//fmt.Println("Server: cache replacement", removedItem, "for", requestFile, "Can swap:", canSwap)
 			}
 		}
 		swapItemLock.Unlock()
 		edgeCacheLock.Unlock()
 	}
-	fmt.Println("Server: Sending", requestFile, "to client")
+	//fmt.Println("Server: Sending", requestFile, "to client")
 	simulSendData(1)
 	edgeCacheLock.Lock()
 	edgeCache.UpdateNode(requestFile, -1)
@@ -150,29 +151,31 @@ func receiveRequest(c *gin.Context) {
 	if err := c.BindJSON(&userData); err != nil {
 		return
 	}
-	fmt.Println("Server: Received request from user", userData.UserID, "for data", userData.RequestFile)
+	//fmt.Println("Server: Received request from user", userData.UserID, "for data", userData.RequestFile)
 	if common.EnableMulticast {
 		if multicastNeeded {
 			//multicast data
 			incomingData <- userData
-			userPort := fetchUDPPort(userData.UserID)
+			returnPorts := fetchUDPPort(userData.UserID)
 			response := gin.H{
-				"UDPPort": userPort,
-				"status":  "change to Multicast",
+				//TODO: need to get server
+				"UserPort":      returnPorts[0],
+				"ServerPort":    returnPorts[1],
+				"StatusMessage": "change to Multicast",
 			}
 			c.JSON(333, response)
 		} else {
-			fmt.Println("Server: Multicast not needed, fetching data directly for", userData.UserID)
+			//fmt.Println("Server: Multicast not needed, fetching data directly for", userData.UserID)
 			sendUnicastData(userData.RequestFile, c)
 		}
 	} else {
-		fmt.Println("Server: Multicast not needed, fetching data directly for", userData.UserID)
+		//fmt.Println("Server: Multicast not needed, fetching data directly for", userData.UserID)
 		sendUnicastData(userData.RequestFile, c)
 	}
 }
 
-func fetchUDPPort(userid int) string {
-	udpAnnounceChannel[userid] = make(chan string)
+func fetchUDPPort(userid int) [2]string {
+	udpAnnounceChannel[userid] = make(chan [2]string)
 	returnPort := <-udpAnnounceChannel[userid]
 	announceChannelLock.Lock()
 	defer announceChannelLock.Unlock()
@@ -186,7 +189,7 @@ func sendUnicastData(requestFile string, c *gin.Context) {
 	exists, _ := edgeCache.Get(requestFile, 1)
 	if exists {
 		//exists in cache, http 200 for hit
-		fmt.Println("Server cache hit for", requestFile)
+		//fmt.Println("Server cache hit for", requestFile)
 		edgeCacheLock.Unlock()
 		simulSendData(1)
 		edgeCacheLock.Lock()
@@ -195,7 +198,7 @@ func sendUnicastData(requestFile string, c *gin.Context) {
 		c.Status(http.StatusOK)
 	} else {
 		//does not exist cache, check swap
-		fmt.Println("Server cache miss for", requestFile)
+		//fmt.Println("Server cache miss for", requestFile)
 		edgeCacheLock.Unlock()
 		swapCacheAndSwap(requestFile, c)
 	}
@@ -205,9 +208,9 @@ func swapCacheAndSwap(requestFile string, c *gin.Context) {
 	swapItemLock.Lock()
 	if _, exists := swapItem[requestFile]; exists {
 		//if exists in swap
-		fmt.Println("Server: swap hit for", requestFile)
+		//fmt.Println("Server: swap hit for", requestFile)
 		if swapItem[requestFile].inTransit && swapItem[requestFile].waitingSwap {
-			fmt.Println("Server: swap hit for", requestFile, "is already in transit due to another process")
+			//fmt.Println("Server: swap hit for", requestFile, "is already in transit due to another process")
 			//someone else already called for this, just need to wait
 			swapItemLock.Unlock()
 			inEdge := false
@@ -238,7 +241,7 @@ func swapCacheAndSwap(requestFile string, c *gin.Context) {
 				delete(swapItem, requestFile)
 				newItem := swapItemStruct{fullyCached: true, inTransit: false, waitingSwap: false}
 				swapItem[removedItem] = newItem
-				fmt.Println("Server swap ", removedItem, "for", requestFile)
+				//fmt.Println("Server swap ", removedItem, "for", requestFile)
 			}
 			swapItemLock.Unlock()
 			edgeCacheLock.Unlock()
@@ -252,29 +255,29 @@ func swapCacheAndSwap(requestFile string, c *gin.Context) {
 	} else {
 		//does not exist in swap
 		//if there is enough space in swap, just call
-		fmt.Println("Server swap miss for", requestFile)
+		//fmt.Println("Server swap miss for", requestFile)
 		if len(swapItem) <= swapItemCapacity {
 			newItem := swapItemStruct{fullyCached: false, inTransit: true, waitingSwap: true}
 			swapItem[requestFile] = newItem
-			fmt.Println("Server swap memory NOT full, requesting", requestFile)
+			//fmt.Println("Server swap memory NOT full, requesting", requestFile)
 			swapItemLock.Unlock()
 			simulFetchData(requestFile, c, 336)
 			return
 		} else {
 			//if there is no empty space in swap
-			fmt.Println("Server swap memory FULL")
+			//fmt.Println("Server swap memory FULL")
 			removeItem := checkSwapItem()
 			if removeItem != "none" {
 				//there is a removable swap item
 				delete(swapItem, removeItem)
 				newItem := swapItemStruct{fullyCached: false, inTransit: true, waitingSwap: true}
 				swapItem[requestFile] = newItem
-				fmt.Println("Server swapping swap memory", removeItem, " for", requestFile)
+				//fmt.Println("Server swapping swap memory", removeItem, " for", requestFile)
 				swapItemLock.Unlock()
 				simulFetchData(requestFile, c, 337)
 			} else {
 				//no swap is replacable, need to fetch from cloud
-				fmt.Println("Server no swap memory to replace, fetching from cloud")
+				//fmt.Println("Server no swap memory to replace, fetching from cloud")
 				swapItemLock.Unlock()
 				c.Status(334)
 				return

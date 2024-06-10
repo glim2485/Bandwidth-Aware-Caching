@@ -6,8 +6,12 @@ import (
 	"gjlim2485/bandwidthawarecaching/server"
 	"gjlim2485/bandwidthawarecaching/user"
 	"log"
-	"net/http"
-	_ "net/http/pprof" // Import the pprof package
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"runtime/pprof"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,11 +19,12 @@ import (
 )
 
 func main() {
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
+	stopMemProfile := startProfile("memprofile_", 1*time.Second)
+	defer close(stopMemProfile)
+
 	go server.SimulStartServer()
 	go server.SimulStartCloud()
+	go garbageCollectionFunc(1 * time.Second)
 	var wg sync.WaitGroup
 	time.Sleep(5 * time.Second)
 	startTime := time.Now()
@@ -91,4 +96,106 @@ func main() {
 		fmt.Println(err)
 	}
 	fmt.Println("simulation finished and logged to dataLog.xlsx")
+}
+
+// debugging functions
+func startProfile(filenamePrefix string, interval time.Duration) chan bool {
+	stop := make(chan bool)
+	go func() {
+		currDir := "/home/dnclab/Bandwidth-Aware-Caching/log"
+		latestFolder, _ := findLatestFolderNumber(currDir)
+		folderName := fmt.Sprintf("log_%d", latestFolder+1)
+		logDir := filepath.Join(currDir, folderName)
+		os.Mkdir(logDir, 0755)
+		memDir := filepath.Join(logDir, "memLog")
+		cpuDir := filepath.Join(logDir, "cpuLog")
+		readMemDir := filepath.Join(logDir, "readMemLog")
+		os.Mkdir(memDir, 0755)
+		os.Mkdir(cpuDir, 0755)
+		os.Mkdir(readMemDir, 0755)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		count := 0
+		var m runtime.MemStats
+		readMemFile := fmt.Sprintf("%s.log", "readMemory")
+		f3, _ := os.Create(filepath.Join(readMemDir, readMemFile))
+		defer f3.Close()
+		for {
+			select {
+			case <-ticker.C:
+				memFile := fmt.Sprintf("%s%d.out", "memory_", count)
+				cpuFile := fmt.Sprintf("%s%d.out", "cpu_", count)
+
+				f1, _ := os.Create(filepath.Join(memDir, memFile))
+				defer f1.Close()
+				f2, _ := os.Create(filepath.Join(cpuDir, cpuFile))
+				if err := pprof.Lookup("heap").WriteTo(f1, 0); err != nil {
+					log.Printf("could not write memory profile %s: %v", memFile, err)
+				}
+
+				if err := pprof.StartCPUProfile(f2); err != nil {
+					log.Printf("could not write cpu profile %s: %v", cpuFile, err)
+				} else {
+					time.Sleep(interval)
+					pprof.StopCPUProfile()
+				}
+				f2.Close()
+				runtime.ReadMemStats(&m)
+				logger := log.New(f3, "", log.LstdFlags)
+				logger.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+				logger.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
+				logger.Printf("\tSys = %v MiB", bToMb(m.Sys))
+				logger.Printf("\tHeapAlloc = %v MiB", bToMb(m.HeapAlloc))
+				logger.Printf("\tHeapSys = %v MiB", bToMb(m.HeapSys))
+				logger.Printf("\tHeapIdle = %v MiB", bToMb(m.HeapIdle))
+				logger.Printf("\tHeapInuse = %v MiB", bToMb(m.HeapInuse))
+				logger.Printf("\tHeapReleased = %v MiB", bToMb(m.HeapReleased))
+				logger.Printf("\tHeapObjects = %v\n", m.HeapObjects)
+				logger.Printf("\tNumGC = %v\n", m.NumGC)
+				count++
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return stop
+}
+
+func bToMb(b uint64) uint64 {
+	return b / 1024 / 1024
+}
+
+func findLatestFolderNumber(root string) (int, error) {
+	latestNumber := 0
+	re := regexp.MustCompile(`^log_(\d+)$`)
+
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			matches := re.FindStringSubmatch(info.Name())
+			if matches != nil {
+				num, err := strconv.Atoi(matches[1])
+				if err != nil {
+					return err
+				}
+				if num > latestNumber {
+					latestNumber = num
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return latestNumber, nil
+}
+
+func garbageCollectionFunc(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	for range ticker.C {
+		runtime.GC()
+	}
 }

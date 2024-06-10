@@ -2,9 +2,9 @@ package common
 
 import "sync"
 
-var UserCount int = 3
-var UserIterations int = 100
-var EnableMulticast bool = false
+var UserCount int = 15
+var UserIterations int = 50
+var EnableMulticast bool = true
 var EnableCodeCache bool = false
 var MaxBandwidth float64 = 100 //MB aka 0.1GB
 var ServerIP string = "localhost"

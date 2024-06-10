@@ -1,12 +1,16 @@
 package lru
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
 
 type LRUCache struct {
 	capacity int
 	cache    map[string]*Node
 	head     *Node
 	tail     *Node
+	buffer   []string
 }
 
 type Node struct {
@@ -23,6 +27,7 @@ func Constructor(capacity int) LRUCache {
 		cache:    make(map[string]*Node),
 		head:     nil,
 		tail:     nil,
+		buffer:   make([]string, 0, capacity),
 	}
 }
 
@@ -84,18 +89,27 @@ func (c *LRUCache) moveToFront(node *Node) {
 func (c *LRUCache) removeNode(node *Node) {
 	if node == c.head {
 		c.head = node.next
+		if c.head != nil {
+			c.head.prev = nil
+		}
 	} else if node == c.tail {
 		c.tail = node.prev
+		if c.tail != nil {
+			c.tail.next = nil
+		}
 	} else {
 		node.prev.next = node.next
 		node.next.prev = node.prev
 	}
+	node.prev = nil
+	node.next = nil
 }
 
+// checks which node can be deleted
 func (c *LRUCache) deleteNode(node *Node) string {
 	for node.InUse >= 1 {
 		node = node.prev
-		if c.head == node {
+		if node == nil || c.head == node {
 			return "none"
 		}
 	}
@@ -117,10 +131,32 @@ func (c *LRUCache) addToFront(node *Node) {
 
 func (c *LRUCache) GetCacheList() []string {
 	current := c.head
-	returnSlice := []string{}
+	count := 0
 	for current != nil {
-		returnSlice = append(returnSlice, current.key)
+		if count < len(c.buffer) {
+			c.buffer[count] = current.key
+		} else {
+			c.buffer = append(c.buffer, current.key)
+			//fmt.Println("buffer size", SizeOfSlice(c.buffer), " and current key size", unsafe.Sizeof(current.key))
+		}
 		current = current.next
+		count++
 	}
-	return returnSlice
+	return c.buffer[:count]
+}
+
+//debug use
+
+func (c *LRUCache) GetLength() int {
+	return len(c.cache)
+}
+
+func SizeOfSlice(slice interface{}) uintptr {
+	v := reflect.ValueOf(slice)
+	if v.Kind() != reflect.Slice {
+		panic("SizeOfSlice: not a slice")
+	}
+
+	elemSize := v.Type().Elem().Size()
+	return uintptr(v.Len()) * elemSize
 }
