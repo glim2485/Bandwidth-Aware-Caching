@@ -23,7 +23,7 @@ type serverResponse struct {
 
 func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGroup) {
 	fmt.Println("User", userid, "started")
-	defer wg.Done()
+	//defer wg.Done()
 	//set its port to be 40000 + userid
 	ownPort := strconv.Itoa(40000 + userid)
 	//all user cache inuse is set to false for experiment's sake
@@ -31,6 +31,7 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 	for i := 0; i < iteration; i++ {
 		userFiles := userCache.GetCacheList()
 		userRequest := generateRequestFile()
+		fmt.Println("User", userid, "iteration", i, "started for", userRequest)
 		requestMessage := common.UserRequest{
 			UserID:      userid,
 			RequestFile: userRequest,
@@ -68,11 +69,12 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 			}
 			var response serverResponse
 			err = json.Unmarshal(body, &response)
+			fmt.Println("user", userid, "received multicast request for", userRequest, "from port", response.UserPort, "to port", response.ServerPort)
 			if err != nil {
 				//fmt.Println("Error unmarshalling JSON:", err)
 				return
 			}
-			if joinMulticast(response.UserPort, response.ServerPort, ownPort) {
+			if joinMulticast(response.UserPort, response.ServerPort, ownPort, userid, userRequest) {
 				userCache.Put(userRequest, 0)
 			} else {
 				//fmt.Println("Error joining multicast group")
@@ -103,6 +105,7 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 		//fmt.Println("User", userid, " current cache size:", userCache.GetLength())
 	}
 	fmt.Println("User", userid, "finished")
+	wg.Done()
 }
 
 // case 335: was swapped with swapped item
@@ -111,32 +114,11 @@ func generateRequestFile() string {
 	return "file" + strconv.Itoa(rand.Intn(50)+1)
 }
 
-func joinMulticast(userPort string, serverPort string, ownPort string) bool {
+func joinMulticast(userPort string, serverPort string, ownPort string, userid int, requestFile string) bool {
 	// Resolve addresses
 	serverAddr, err := net.ResolveUDPAddr("udp", common.ServerIP+":"+serverPort)
 	if err != nil {
 		fmt.Println("Error resolving server address:", err)
-		return false
-	}
-
-	clientAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+ownPort)
-	if err != nil {
-		fmt.Println("Error resolving client address:", err)
-		return false
-	}
-
-	// Set up UDP connection for unicast communication
-	conn, err := net.ListenUDP("udp", clientAddr)
-	if err != nil {
-		fmt.Println("Error setting up client connection:", err)
-		return false
-	}
-	defer conn.Close()
-
-	// Send ready check to the server
-	_, err = conn.WriteToUDP([]byte("READY"), serverAddr)
-	if err != nil {
-		fmt.Println("Error sending ready check:", err)
 		return false
 	}
 
@@ -147,6 +129,7 @@ func joinMulticast(userPort string, serverPort string, ownPort string) bool {
 		return false
 	}
 
+	//ready multicast tunnel
 	mconn, err := net.ListenMulticastUDP("udp", nil, multicastAddr)
 	if err != nil {
 		fmt.Println("Error joining multicast group:", err)
@@ -157,15 +140,55 @@ func joinMulticast(userPort string, serverPort string, ownPort string) bool {
 	mconn.SetReadBuffer(1024)
 
 	buf := make([]byte, 1024)
+
+	//multicast reception ready, send ready message
+	clientAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+ownPort)
+	if err != nil {
+		fmt.Println("Error resolving client address:", err)
+		return false
+	}
+	conn, err := net.ListenUDP("udp", clientAddr)
+	if err != nil {
+		fmt.Println("Error setting up client connection:", err)
+		return false
+	}
+	defer conn.Close()
+
+	// Send ready check to the server
+	closeChan := make(chan bool)
+	go sendReadyMessage(userid, requestFile, serverPort, conn, serverAddr, closeChan) //send ready check 3 times
+	//finish receiving multicast message
 	for {
-		n, src, err := mconn.ReadFromUDP(buf)
+		n, _, err := mconn.ReadFromUDP(buf)
+		//n, src, err := mconn.ReadFromUDP(buf)
 		if err != nil {
 			fmt.Println("Error receiving multicast message:", err)
 			continue
 		}
 		if string(buf[:n]) == "FINISHED" {
-			fmt.Printf("Received message from %s\n", src)
+			//fmt.Printf("Received message from %s\n", src)
+			closeChan <- true
 			return true
 		}
+	}
+}
+
+func sendReadyMessage(userid int, requestFile string, serverPort string, conn *net.UDPConn, serverAddr *net.UDPAddr, closeChan <-chan bool) {
+	ticker := time.NewTicker(2 * time.Second)
+	for {
+		select {
+		case <-closeChan:
+			return
+		case <-ticker.C:
+			_, err := conn.WriteToUDP([]byte("READY"+strconv.Itoa(userid)), serverAddr)
+			if err != nil {
+				fmt.Println("Error sending ready check:", err)
+			} else {
+				fmt.Println("User", userid, "sent ready check for file ", requestFile, "to port", serverPort)
+			}
+		case <-time.After(7 * time.Second):
+			fmt.Println("User", userid, "timed out")
+		}
+
 	}
 }

@@ -34,6 +34,7 @@ func main() {
 	}
 	wg.Wait()
 	endTime := time.Now()
+	fmt.Println("simulation finished, now logging into excel sheet")
 	//log data to excel sheet
 	f, err := excelize.OpenFile("/home/dnclab/Bandwidth-Aware-Caching/dataLog.xlsx")
 	if err != nil {
@@ -95,7 +96,7 @@ func main() {
 	if err = f.Save(); err != nil {
 		fmt.Println(err)
 	}
-	fmt.Println("simulation finished and logged to dataLog.xlsx")
+	fmt.Println("sucessfully logged to dataLog.xlsx")
 }
 
 // debugging functions

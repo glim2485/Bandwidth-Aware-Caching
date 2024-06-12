@@ -16,6 +16,7 @@ var concurrentConnectionLock sync.Mutex
 var bandwidthPerConnection float64 = common.MaxBandwidth
 var bandwidthLock sync.RWMutex
 var multicastNeeded bool = false
+
 var udpAnnounceChannel = make(map[int]chan [2]string)
 var announceChannelLock sync.Mutex
 var incomingData = make(chan common.UserRequest, 30)
@@ -36,6 +37,10 @@ func SimulStartServer() {
 	edgeCache = lru.Constructor(common.EdgeCacheSize)
 	for i := 0; i < common.EdgeCacheSize; i++ {
 		edgeCache.Put(fmt.Sprintf("file%d", (i+1)), 1)
+	}
+	//create channels for each user
+	for i := 0; i < common.UserCount; i++ {
+		udpAnnounceChannel[i] = make(chan [2]string)
 	}
 	go dataCollector()
 	router := gin.Default()
@@ -58,7 +63,6 @@ func dataCollector() {
 			go handleData(copiedData, currUDPPort)
 			//reset collectedData
 			collectedData = nil
-			copiedData = nil
 		case data := <-incomingData:
 			collectedData = append(collectedData, data)
 		}
@@ -82,8 +86,10 @@ func updateBandwidthPerConnection() {
 		//update multicast needed
 		if bandwidthPerConnection < 0.2*common.MaxBandwidth {
 			multicastNeeded = true
+			//fmt.Println("Server: Multicast needed")
 		} else {
 			multicastNeeded = false
+			//fmt.Println("Server: Multicast not needed")
 		}
 	}
 }
@@ -155,14 +161,17 @@ func receiveRequest(c *gin.Context) {
 	if common.EnableMulticast {
 		if multicastNeeded {
 			//multicast data
+			//sending userData to incomingData, located at handleData
 			incomingData <- userData
-			returnPorts := fetchUDPPort(userData.UserID)
+			//How do I do this part?
+			returnPorts := <-udpAnnounceChannel[userData.UserID]
 			response := gin.H{
 				//TODO: need to get server
 				"UserPort":      returnPorts[0],
 				"ServerPort":    returnPorts[1],
 				"StatusMessage": "change to Multicast",
 			}
+			fmt.Println("Sent ready request to user", userData.UserID, "for", userData.RequestFile, "at port", returnPorts[0], "from port", returnPorts[1])
 			c.JSON(333, response)
 		} else {
 			//fmt.Println("Server: Multicast not needed, fetching data directly for", userData.UserID)
@@ -173,17 +182,6 @@ func receiveRequest(c *gin.Context) {
 		sendUnicastData(userData.RequestFile, c)
 	}
 }
-
-func fetchUDPPort(userid int) [2]string {
-	udpAnnounceChannel[userid] = make(chan [2]string)
-	returnPort := <-udpAnnounceChannel[userid]
-	announceChannelLock.Lock()
-	defer announceChannelLock.Unlock()
-	close(udpAnnounceChannel[userid])
-	delete(udpAnnounceChannel, userid)
-	return returnPort
-}
-
 func sendUnicastData(requestFile string, c *gin.Context) {
 	edgeCacheLock.Lock()
 	exists, _ := edgeCache.Get(requestFile, 1)

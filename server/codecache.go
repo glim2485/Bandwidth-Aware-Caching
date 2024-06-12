@@ -5,6 +5,8 @@ import (
 	"gjlim2485/bandwidthawarecaching/common"
 	"net"
 	"os"
+	"regexp"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -40,7 +42,7 @@ func handleData(userData []common.UserRequest, port int) {
 			go multicastData(x.userID, filename, x.multicastPortUser, x.multicastPortServer)
 		}
 	}
-	//missing code cache condition
+	//TODO: missing code cache condition
 }
 
 func MulticastGroup(userData []common.UserRequest) map[string]multicastGroup {
@@ -108,13 +110,8 @@ func getIntersection(setA []string, setB []string) []string {
 
 // made differently due to simulator
 func multicastData(users []int, file string, userPort string, serverPort string) {
-	//spread port for users
-	// userPort is the port the users are going to connect to RECEIVE data
-	for _, x := range users {
-		udpAnnounceChannel[x] <- [2]string{userPort, serverPort}
-	}
 
-	readyChan := make(chan string, len(users))
+	readyChan := make(chan int, len(users))
 	var wg sync.WaitGroup
 	//serverPort is used for the server to receive data
 	serverAddr, err := net.ResolveUDPAddr("udp", common.ServerIP+":"+serverPort)
@@ -129,6 +126,14 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 		os.Exit(1)
 	}
 	defer conn.Close()
+	fmt.Println(file, "need ready from users:", users, "at port", serverPort)
+
+	//spread port for users
+	// userPort is the port the users are going to connect to RECEIVE data
+	for _, x := range users {
+		//channels should have been created by now
+		udpAnnounceChannel[x] <- [2]string{userPort, serverPort}
+	}
 
 	//check for all connections
 	for range users {
@@ -142,19 +147,34 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 	}()
 
 	allReady := true
-	for range users {
+	currCount := 0
+	timeout := time.After(20 * time.Second)
+	readyUsers := []int{}
+	for {
 		select {
-		case <-readyChan:
-			fmt.Println("Ready check received")
-		case <-time.After(10 * time.Second):
+		case ready := <-readyChan:
+			if !sliceContainsInt(readyUsers, ready) {
+				currCount++
+				fmt.Println("Ready check received in port", serverPort, "for", file, "from user", ready, "(", currCount, "/", len(users), ")")
+				readyUsers = append(readyUsers, ready)
+				if currCount == len(users) {
+					allReady = true
+					break
+				}
+			}
+		case <-timeout:
 			allReady = false
+			break
+		}
+		if currCount == len(users) || !allReady {
+			break
 		}
 	}
 
 	if allReady {
-		fmt.Println("All users ready, multicasting ", file)
+		fmt.Println("All users ready, multicasting ", file, " through port", serverPort)
 	} else {
-		fmt.Println("Not all users ready")
+		fmt.Println("Not all users ready for file", file, "ready:", readyUsers, "expected:", users, "from port", serverPort)
 		os.Exit(1)
 	}
 
@@ -174,24 +194,53 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 	//here, we should be sending data, but instead we will simulate it
 	simulSendData(1)
 	simulmsg := "FINISHED"
-	_, err = conn.Write([]byte(simulmsg))
+	//error happens here
+	_, err = multconn.Write([]byte(simulmsg))
 	if err != nil {
 		fmt.Println("Error sending message:", err)
 		os.Exit(1)
 	}
-	fmt.Println("Multicast transmission finished")
+	fmt.Println("Multicast transmission finished for", file, "to users", users, ". Closing port", serverPort)
 }
 
-func receiveReadyCheck(conn *net.UDPConn, readyChan chan<- string, wg *sync.WaitGroup) {
+func receiveReadyCheck(conn *net.UDPConn, readyChan chan<- int, wg *sync.WaitGroup) {
 	defer wg.Done()
 	buf := make([]byte, 1024)
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	n, addr, err := conn.ReadFromUDP(buf)
+	conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+	n, _, err := conn.ReadFromUDP(buf)
 	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			fmt.Println("Read timeout:", err)
+			return
+		}
 		fmt.Println("Error reading from UDP:", err)
-		os.Exit(1)
+		return
 	}
-	if string(buf[:n]) == "READY" {
-		readyChan <- addr.String()
+	status, returnID := readyRegex(string(buf[:n]))
+	if status == "READY" {
+		readyChan <- returnID
 	}
+}
+
+func readyRegex(input string) (string, int) {
+	re := regexp.MustCompile(`^(?P<ready>READY)(?P<userid>\d+)$`)
+	matches := re.FindStringSubmatch(input)
+	if len(matches) != 3 {
+		fmt.Println("Invalid ready message")
+		return "false", 0
+	}
+	userID, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return "false", 0
+	}
+	return matches[1], userID
+}
+
+func sliceContainsInt(slice []int, item int) bool {
+	for _, x := range slice {
+		if x == item {
+			return true
+		}
+	}
+	return false
 }
