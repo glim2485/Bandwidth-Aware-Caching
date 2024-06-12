@@ -30,7 +30,7 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 	userCache := lru.Constructor(cacheSize)
 	for i := 0; i < iteration; i++ {
 		userFiles := userCache.GetCacheList()
-		userRequest := generateRequestFile()
+		userRequest := generateRequestFile(userid)
 		fmt.Println("User", userid, "iteration", i, "started for", userRequest)
 		requestMessage := common.UserRequest{
 			UserID:      userid,
@@ -110,8 +110,12 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 
 // case 335: was swapped with swapped item
 // case 336: cache needs to be fetched from cloud, in-transit
-func generateRequestFile() string {
-	return "file" + strconv.Itoa(rand.Intn(50)+1)
+func generateRequestFile(userid int) string {
+	//this is so I can keep consistent "random" file requests for comparion
+	seed := int64(userid+1) * common.SeedMultiplier
+	source := rand.NewSource(seed)
+	rng := rand.New(source)
+	return "file" + strconv.Itoa(rng.Intn(50)+1)
 }
 
 func joinMulticast(userPort string, serverPort string, ownPort string, userid int, requestFile string) bool {

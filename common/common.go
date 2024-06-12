@@ -7,7 +7,7 @@ var UserIterations int = 25
 var EnableMulticast bool = true
 var EnableCodeCache bool = false
 var MaxBandwidth float64 = 2500 //MB aka 0.1GB
-var DataSize float64 = 100      // MB aka 1GB
+var DataSize float64 = 500      // MB aka 1GB
 var ServerIP string = "localhost"
 var MulticastIP string = "224.0.1.10"
 var ServerPort string = "8080"
@@ -15,6 +15,7 @@ var CloudPort string = "55555"
 var SwapItemSize int = 10
 var UserCacheSize int = 50
 var EdgeCacheSize int = UserCacheSize * 10
+var SeedMultiplier int64 = 10
 
 // shared structs for users to encode and decode JSON files
 type UserRequest struct {

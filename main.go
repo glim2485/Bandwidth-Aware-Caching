@@ -30,7 +30,7 @@ func main() {
 	startTime := time.Now()
 	for i := 0; i < common.UserCount; i++ {
 		wg.Add(1)
-		go user.SimulUserRequests(i+1, common.UserIterations, common.UserCacheSize, &wg)
+		go user.SimulUserRequests(i, common.UserIterations, common.UserCacheSize, &wg)
 	}
 	wg.Wait()
 	endTime := time.Now()

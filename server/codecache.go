@@ -14,7 +14,7 @@ import (
 var collectedData = make([]common.UserRequest, 0)
 var currUDPPort = 50000
 var UDPlock sync.RWMutex
-var multicastWaitTime = time.Duration(3) * time.Second
+var multicastWaitTime = time.Duration(2) * time.Second
 
 type multicastGroup struct {
 	userID              []int
@@ -34,15 +34,42 @@ func progressUDPPort() {
 
 func handleData(userData []common.UserRequest, port int) {
 	//find multicast targets
+	fmt.Println("finding multicast groups for", userData)
 	multicastGroups := MulticastGroup(userData)
 
 	//if no code cache is needed
 	if !common.EnableCodeCache {
 		for filename, x := range multicastGroups {
-			go multicastData(x.userID, filename, x.multicastPortUser, x.multicastPortServer)
+			copiedGroup := make([]int, len(x.userID))
+			//to avoid changing midway?
+			copy(copiedGroup, x.userID)
+			go multicastData(copiedGroup, filename, x.multicastPortUser, x.multicastPortServer)
 		}
+	} else {
+
 	}
 	//TODO: missing code cache condition
+}
+
+func codeCacheGroup(groups map[string]multicastGroup) map[string]multicastGroup {
+	//groups contain all the multicast groups along with their intersection
+	//time complexity O(n^2)
+	returnGroup := make(map[string]multicastGroup)
+	for filename, _ := range groups {
+		edgeCacheLock.Lock()
+		exists, _ := edgeCache.Get(filename, 1)
+		edgeCacheLock.Unlock()
+		//if it does not exist in cache, we can't code cache it so multicast this separately
+		if !exists {
+			returnGroup[filename] = groups[filename]
+			delete(groups, filename)
+		}
+	}
+	//from here on, all members of groups are in the cache and we can start matching patterns
+	for filename, x := range groups {
+		//TODO: need to think of a way to match code patterns
+	}
+	return returnGroup
 }
 
 func MulticastGroup(userData []common.UserRequest) map[string]multicastGroup {
@@ -110,7 +137,7 @@ func getIntersection(setA []string, setB []string) []string {
 
 // made differently due to simulator
 func multicastData(users []int, file string, userPort string, serverPort string) {
-
+	fmt.Println("Server preparing to multicast", file, "to users", users, "through port", serverPort)
 	readyChan := make(chan int, len(users))
 	var wg sync.WaitGroup
 	//serverPort is used for the server to receive data
@@ -133,6 +160,7 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 	for _, x := range users {
 		//channels should have been created by now
 		udpAnnounceChannel[x] <- [2]string{userPort, serverPort}
+		fmt.Println("Server sent udpAnnounceChannel", serverPort, "to user", x, "out of", users, "for", file)
 	}
 
 	//check for all connections
@@ -237,6 +265,15 @@ func readyRegex(input string) (string, int) {
 }
 
 func sliceContainsInt(slice []int, item int) bool {
+	for _, x := range slice {
+		if x == item {
+			return true
+		}
+	}
+	return false
+}
+
+func sliceContainsString(slice []string, item string) bool {
 	for _, x := range slice {
 		if x == item {
 			return true

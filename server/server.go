@@ -51,19 +51,23 @@ func SimulStartServer() {
 
 // this should be done as a SINGULAR go routine
 func dataCollector() {
+	trackerId := 0
 	ticker := time.NewTicker(multicastWaitTime)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			//use collectedData
+			trackerId++
 			copiedData := make([]common.UserRequest, len(collectedData))
 			copy(copiedData, collectedData)
 			//make sure to pass by value
 			go handleData(copiedData, currUDPPort)
+			fmt.Println("[", trackerId-1, "]Server handling data", copiedData)
 			//reset collectedData
 			collectedData = nil
 		case data := <-incomingData:
+			fmt.Println("[", trackerId, "]Server: collected user", data.UserID, "request for", data.RequestFile)
 			collectedData = append(collectedData, data)
 		}
 	}
@@ -163,8 +167,10 @@ func receiveRequest(c *gin.Context) {
 			//multicast data
 			//sending userData to incomingData, located at handleData
 			incomingData <- userData
+			fmt.Println("Server needs to multicast", userData.RequestFile, "to user", userData.UserID)
 			//How do I do this part?
 			returnPorts := <-udpAnnounceChannel[userData.UserID]
+			fmt.Println("Server can send UDP port", returnPorts, "to user", userData.UserID, "for", userData.RequestFile)
 			response := gin.H{
 				//TODO: need to get server
 				"UserPort":      returnPorts[0],
