@@ -14,7 +14,7 @@ import (
 var collectedData = make([]common.UserRequest, 0)
 var currUDPPort = 50000
 var UDPlock sync.RWMutex
-var multicastWaitTime = time.Duration(2) * time.Second
+var multicastWaitTime = time.Duration(common.MulticastCollectTime) * time.Second
 
 type multicastGroup struct {
 	userID              []int
@@ -36,40 +36,24 @@ func handleData(userData []common.UserRequest, port int) {
 	//find multicast targets
 	fmt.Println("finding multicast groups for", userData)
 	multicastGroups := MulticastGroup(userData)
-
-	//if no code cache is needed
+	var serviceGroup map[string]multicastGroup
 	if !common.EnableCodeCache {
-		for filename, x := range multicastGroups {
-			copiedGroup := make([]int, len(x.userID))
-			//to avoid changing midway?
-			copy(copiedGroup, x.userID)
-			go multicastData(copiedGroup, filename, x.multicastPortUser, x.multicastPortServer)
-		}
+		//code cache disabled, just use multicast group
+		serviceGroup = multicastGroups
 	} else {
+		fmt.Println("finding codecache groups for", multicastGroups)
+		serviceGroup = codeCacheGroup(multicastGroups)
+		//fmt.Println("codecache found", serviceGroup)
+	}
 
+	for filename, x := range serviceGroup {
+		copiedGroup := make([]int, len(x.userID))
+		//to avoid changing midway?
+		copy(copiedGroup, x.userID)
+		go multicastData(copiedGroup, filename, x.multicastPortUser, x.multicastPortServer)
+		//if no code cache is needed
+		//TODO: missing code cache condition
 	}
-	//TODO: missing code cache condition
-}
-
-func codeCacheGroup(groups map[string]multicastGroup) map[string]multicastGroup {
-	//groups contain all the multicast groups along with their intersection
-	//time complexity O(n^2)
-	returnGroup := make(map[string]multicastGroup)
-	for filename, _ := range groups {
-		edgeCacheLock.Lock()
-		exists, _ := edgeCache.Get(filename, 1)
-		edgeCacheLock.Unlock()
-		//if it does not exist in cache, we can't code cache it so multicast this separately
-		if !exists {
-			returnGroup[filename] = groups[filename]
-			delete(groups, filename)
-		}
-	}
-	//from here on, all members of groups are in the cache and we can start matching patterns
-	for filename, x := range groups {
-		//TODO: need to think of a way to match code patterns
-	}
-	return returnGroup
 }
 
 func MulticastGroup(userData []common.UserRequest) map[string]multicastGroup {
@@ -112,6 +96,84 @@ func MulticastGroup(userData []common.UserRequest) map[string]multicastGroup {
 			}
 		}
 	}
+	return returnGroup
+}
+
+func codeCacheGroup(groups map[string]multicastGroup) map[string]multicastGroup {
+	returnGroup := make(map[string]multicastGroup)
+	deleteGroup := make([]string, 0)
+
+	for filename, group := range groups {
+		//check if file is in cache. If it is, add a counter
+		edgeCacheLock.Lock()
+		exists, _ := edgeCache.Get(filename, 1)
+		edgeCacheLock.Unlock()
+		if !exists {
+			//if it doesnt exist in cache, we can't code cache it so multicast this separately
+			//we store all the delete keys to delete later to avoid memory issues
+			deleteGroup = append(deleteGroup, filename)
+			//add this group to the return group since it wont be modified
+			returnGroup[filename] = group
+		}
+	}
+
+	//get rid of all the non-code cacheable groups
+	for _, filename := range deleteGroup {
+		delete(groups, filename)
+	}
+
+	//from here on, all members of groups are in the cache and we can start matching patterns
+	codedGroup := groups
+	for i := 0; i < common.MaxCodedItems; i++ {
+		//swap group used to dynamically update codedGroups
+		swapGroup := make(map[string]multicastGroup)
+		//codedVisit is used to avoid double counting
+		codedVisit := make(map[string]bool)
+		for filename1, x := range codedGroup {
+			if codedVisit[filename1] {
+				continue
+			}
+			for filename2, y := range codedGroup {
+				if filename1 == filename2 || codedVisit[filename2] {
+					continue
+				}
+				if sliceContainsFilenames(x.intersection, filename2) && sliceContainsFilenames(y.intersection, filename1) {
+					//found a match, create a new group
+					newIntersection := getIntersection(x.intersection, y.intersection)
+					newGroup := multicastGroup{
+						userID:       append(x.userID, y.userID...),
+						intersection: newIntersection,
+					}
+					swapGroup[filename1+"_"+filename2] = newGroup
+					codedVisit[filename1] = true
+					codedVisit[filename2] = true
+				}
+			}
+		}
+		if len(swapGroup) == 0 {
+			//swapGroup having 0 length means no new groups were created
+			break
+		}
+		//keep updating new groups
+		codedGroup = swapGroup
+	}
+
+	//add groups for new coded files
+	for filename, group := range codedGroup {
+		returnGroup[filename] = group
+	}
+
+	//add the missing ports
+	for filename, group := range returnGroup {
+		progressUDPPort()
+		multicastUser := fmt.Sprintf("%d", currUDPPort)
+		progressUDPPort()
+		multicastServer := fmt.Sprintf("%d", currUDPPort)
+		group.multicastPortUser = multicastUser
+		group.multicastPortServer = multicastServer
+		returnGroup[filename] = group
+	}
+
 	return returnGroup
 }
 
@@ -181,7 +243,7 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 	for {
 		select {
 		case ready := <-readyChan:
-			if !sliceContainsInt(readyUsers, ready) {
+			if !common.SliceContainsInt(readyUsers, ready) {
 				currCount++
 				fmt.Println("Ready check received in port", serverPort, "for", file, "from user", ready, "(", currCount, "/", len(users), ")")
 				readyUsers = append(readyUsers, ready)
@@ -200,7 +262,7 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 	}
 
 	if allReady {
-		fmt.Println("All users ready, multicasting ", file, " through port", serverPort)
+		fmt.Println("All users ready, multicasting ", file, " through port", userPort)
 	} else {
 		fmt.Println("Not all users ready for file", file, "ready:", readyUsers, "expected:", users, "from port", serverPort)
 		os.Exit(1)
@@ -221,7 +283,7 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 	defer multconn.Close()
 	//here, we should be sending data, but instead we will simulate it
 	simulSendData(1)
-	simulmsg := "FINISHED"
+	simulmsg := "FINISHED_" + file
 	//error happens here
 	_, err = multconn.Write([]byte(simulmsg))
 	if err != nil {
@@ -264,18 +326,16 @@ func readyRegex(input string) (string, int) {
 	return matches[1], userID
 }
 
-func sliceContainsInt(slice []int, item int) bool {
-	for _, x := range slice {
-		if x == item {
-			return true
+func sliceContainsFilenames(slice []string, filename string) bool {
+	re := regexp.MustCompile("_")
+	parts := re.Split(filename, -1)
+	maxVote := len(parts)
+	vote := 0
+	for _, x := range parts {
+		if common.SliceContainsString(slice, x) {
+			vote++
 		}
-	}
-	return false
-}
-
-func sliceContainsString(slice []string, item string) bool {
-	for _, x := range slice {
-		if x == item {
+		if vote == maxVote {
 			return true
 		}
 	}

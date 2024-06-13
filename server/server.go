@@ -88,7 +88,7 @@ func updateBandwidthPerConnection() {
 	} else {
 		bandwidthPerConnection = common.MaxBandwidth / float64(concurrentConnection)
 		//update multicast needed
-		if bandwidthPerConnection < 0.2*common.MaxBandwidth {
+		if bandwidthPerConnection < common.MulticastBandwidthMultiplier*common.MaxBandwidth {
 			multicastNeeded = true
 			//fmt.Println("Server: Multicast needed")
 		} else {
@@ -161,7 +161,7 @@ func receiveRequest(c *gin.Context) {
 	if err := c.BindJSON(&userData); err != nil {
 		return
 	}
-	//fmt.Println("Server: Received request from user", userData.UserID, "for data", userData.RequestFile)
+	fmt.Println("Server: Received request from user", userData.UserID, "for data", userData.RequestFile)
 	if common.EnableMulticast {
 		if multicastNeeded {
 			//multicast data

@@ -34,6 +34,7 @@ func Constructor(capacity int) LRUCache {
 // gets a key from the current LRUcache
 // returns true and the value of the key if it exists
 // returns false and "none" if it does not
+// count should be 0 for user
 func (c *LRUCache) Get(key string, count int) (bool, string) {
 	if node, ok := c.cache[key]; ok {
 		node.InUse = node.InUse + count

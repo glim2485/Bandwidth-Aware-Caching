@@ -63,6 +63,15 @@ func main() {
 	f.SetCellValue(sheetName, "A4", "SwapItemSize")
 	f.SetCellValue(sheetName, "B4", fmt.Sprintf("%d", common.SwapItemSize))
 
+	f.SetCellValue(sheetName, "D1", "Multicast")
+	f.SetCellValue(sheetName, "E1", fmt.Sprintf("%t", common.EnableMulticast))
+	f.SetCellValue(sheetName, "D2", "CodeCache")
+	f.SetCellValue(sheetName, "E2", fmt.Sprintf("%t", common.EnableCodeCache))
+	f.SetCellValue(sheetName, "D3", "MaxCodeLoop")
+	f.SetCellValue(sheetName, "E3", fmt.Sprintf("%d", common.MaxCodedItems))
+	f.SetCellValue(sheetName, "D4", "Seed")
+	f.SetCellValue(sheetName, "E4", fmt.Sprintf("%d", common.SeedMultiplier))
+
 	f.SetCellValue(sheetName, "A6", "UserID")
 	f.SetCellValue(sheetName, "B6", "ItemName")
 	f.SetCellValue(sheetName, "C6", "CacheHit")
@@ -77,19 +86,29 @@ func main() {
 		f.SetCellValue(sheetName, fmt.Sprintf("D%d", cellIndex), d.TimeTaken)
 		fetchCount[d.ReturnCode]++
 	}
-	cellIndex++
-	totalDurationMilliseconds := int64(totalTime / time.Millisecond)
-	f.SetCellValue(sheetName, "F1", "Total Duration")
-	f.SetCellValue(sheetName, "G1", fmt.Sprintf("%d ms", totalDurationMilliseconds))
-	f.SetCellValue(sheetName, "F3", "HTTP code")
-	f.SetCellValue(sheetName, "G3", "Fetch Type")
-	f.SetCellValue(sheetName, "H3", "Count")
 
-	fetchCellValue := 4
+	f.SetCellValue(sheetName, "G1", "MulticastMultiplier")
+	f.SetCellValue(sheetName, "H1", fmt.Sprintf("%.1f", common.MulticastBandwidthMultiplier))
+	f.SetCellValue(sheetName, "G2", "MulticastCollectTime")
+	f.SetCellValue(sheetName, "H2", fmt.Sprintf("%d", common.MulticastCollectTime))
+
+	totalDurationMilliseconds := int64(totalTime / time.Millisecond)
+	f.SetCellValue(sheetName, "J1", "Total Duration")
+	f.SetCellValue(sheetName, "K1", fmt.Sprintf("%d ms", totalDurationMilliseconds))
+	f.SetCellValue(sheetName, "J2", "userNumber")
+	f.SetCellValue(sheetName, "K2", fmt.Sprintf("%d", common.UserCount))
+	f.SetCellValue(sheetName, "J3", "Iteration Count")
+	f.SetCellValue(sheetName, "K3", fmt.Sprintf("%d", common.UserIterations))
+
+	f.SetCellValue(sheetName, "J5", "HTTP code")
+	f.SetCellValue(sheetName, "K5", "Fetch Type")
+	f.SetCellValue(sheetName, "I5", "Count")
+
+	fetchCellValue := 6
 	for k, v := range common.FetchType {
-		f.SetCellValue(sheetName, fmt.Sprintf("F%d", fetchCellValue), k)
-		f.SetCellValue(sheetName, fmt.Sprintf("G%d", fetchCellValue), v)
-		f.SetCellValue(sheetName, fmt.Sprintf("H%d", fetchCellValue), fetchCount[k])
+		f.SetCellValue(sheetName, fmt.Sprintf("J%d", fetchCellValue), k)
+		f.SetCellValue(sheetName, fmt.Sprintf("K%d", fetchCellValue), v)
+		f.SetCellValue(sheetName, fmt.Sprintf("L%d", fetchCellValue), fetchCount[k])
 		fetchCellValue++
 	}
 	f.SetActiveSheet(index)
