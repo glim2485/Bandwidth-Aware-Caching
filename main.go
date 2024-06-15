@@ -14,11 +14,27 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"flag"
 
 	"github.com/xuri/excelize/v2"
 )
 
+func init() {
+    flag.BoolVar(&common.EnableMulticast, "enableMulticast", true, "enable multicast feature")
+    flag.BoolVar(&common.EnableCodeCache, "enableCodecast", true, "enable codecast feature")
+    flag.Int64Var(&common.SeedMultiplier, "seedValue", 7, "seed value")
+	flag.IntVar(&common.UserCount, "userCount", 100, "number of users")
+	flag.IntVar(&common.UserIterations, "userIterations", 25, "number of iterations per user")
+	flag.IntVar(&common.UserCacheSize, "userCacheSize", 25, "size of user cache")
+	flag.Float64Var(&common.DataSize, "dataSize", 500, "size of data")
+	flag.Float64Var(&common.MaxBandwidth, "maxBandwidth", 2500, "max bandwidth")
+	flag.IntVar(&common.EdgeCacheSizeMultiplier, "edgeCacheSizeMultiplier", 10, "edge cache size multiplier")
+	flag.IntVar(&common.MaxFiles, "maxFiles", 50, "max files")
+}
+
 func main() {
+	flag.Parse()
+	common.EdgeCacheSize = common.UserCacheSize * common.EdgeCacheSizeMultiplier
 	stopMemProfile := startProfile("memprofile_", 1*time.Second)
 	defer close(stopMemProfile)
 
@@ -36,7 +52,9 @@ func main() {
 	endTime := time.Now()
 	fmt.Println("simulation finished, now logging into excel sheet")
 	//log data to excel sheet
-	f, err := excelize.OpenFile("/home/dnclab/Bandwidth-Aware-Caching/dataLog.xlsx")
+	excelDir, err := os.Getwd()
+	excelDir = filepath.Join(excelDir, "dataLog.xlsx")
+	f, err := excelize.OpenFile(excelDir)
 	if err != nil {
 		fmt.Println(err)
 	}
