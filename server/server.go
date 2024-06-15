@@ -25,6 +25,7 @@ var edgeCacheLock sync.Mutex
 var swapItem = make(map[string]swapItemStruct)
 var swapItemCapacity int = common.SwapItemSize
 var swapItemLock sync.Mutex
+var trackerId int = 0
 
 type swapItemStruct struct {
 	fullyCached bool //the entire file exists in the server now
@@ -51,7 +52,7 @@ func SimulStartServer() {
 
 // this should be done as a SINGULAR go routine
 func dataCollector() {
-	trackerId := 0
+
 	ticker := time.NewTicker(multicastWaitTime)
 	defer ticker.Stop()
 	for {
@@ -63,11 +64,11 @@ func dataCollector() {
 			copy(copiedData, collectedData)
 			//make sure to pass by value
 			go handleData(copiedData, currUDPPort)
-			fmt.Println("[", trackerId-1, "]Server handling data", copiedData)
+			//fmt.Println("[", trackerId-1, "]Server handling data", copiedData)
 			//reset collectedData
 			collectedData = nil
 		case data := <-incomingData:
-			fmt.Println("[", trackerId, "]Server: collected user", data.UserID, "request for", data.RequestFile)
+			//fmt.Println("[", trackerId, "]Server: collected user", data.UserID, "request for", data.RequestFile)
 			collectedData = append(collectedData, data)
 		}
 	}
@@ -161,7 +162,7 @@ func receiveRequest(c *gin.Context) {
 	if err := c.BindJSON(&userData); err != nil {
 		return
 	}
-	fmt.Println("Server: Received request from user", userData.UserID, "for data", userData.RequestFile)
+	fmt.Println("[",trackerId,"]Server: Received request from user", userData.UserID, "for data", userData.RequestFile)
 	if common.EnableMulticast {
 		if multicastNeeded {
 			//multicast data

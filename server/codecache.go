@@ -23,29 +23,31 @@ type multicastGroup struct {
 	multicastPortServer string
 }
 
-func progressUDPPort() {
+func progressUDPPort() int {
 	UDPlock.Lock()
 	defer UDPlock.Unlock()
 	currUDPPort++
-	if currUDPPort >= 60001 {
+	if currUDPPort >= 60000 {
 		currUDPPort = 50000
 	}
+	return currUDPPort
 }
 
 func handleData(userData []common.UserRequest, port int) {
 	//find multicast targets
-	fmt.Println("finding multicast groups for", userData)
+	//fmt.Println("finding multicast groups for", userData)
 	multicastGroups := MulticastGroup(userData)
 	var serviceGroup map[string]multicastGroup
 	if !common.EnableCodeCache {
 		//code cache disabled, just use multicast group
 		serviceGroup = multicastGroups
 	} else {
-		fmt.Println("finding codecache groups for", multicastGroups)
+		//fmt.Println("finding codecache groups for", multicastGroups)
 		serviceGroup = codeCacheGroup(multicastGroups)
 		//fmt.Println("codecache found", serviceGroup)
 	}
 
+	//fmt.Println("Multicasting/Codecaching", serviceGroup)
 	for filename, x := range serviceGroup {
 		copiedGroup := make([]int, len(x.userID))
 		//to avoid changing midway?
@@ -67,10 +69,8 @@ func MulticastGroup(userData []common.UserRequest) map[string]multicastGroup {
 				group.userID = append(group.userID, x.UserID)
 				returnGroup[x.RequestFile] = group
 			} else {
-				progressUDPPort()
-				multicastUser := fmt.Sprintf("%d", currUDPPort)
-				progressUDPPort()
-				multicastServer := fmt.Sprintf("%d", currUDPPort)
+				multicastUser := fmt.Sprintf("%d", progressUDPPort())
+				multicastServer := fmt.Sprintf("%d", progressUDPPort())
 				returnGroup[x.RequestFile] = multicastGroup{
 					userID:              []int{x.UserID},
 					multicastPortUser:   multicastUser,
@@ -128,13 +128,14 @@ func codeCacheGroup(groups map[string]multicastGroup) map[string]multicastGroup 
 		//swap group used to dynamically update codedGroups
 		swapGroup := make(map[string]multicastGroup)
 		//codedVisit is used to avoid double counting
-		codedVisit := make(map[string]bool)
+		codedMerge := make(map[string]bool)
+		deleteGroup := []string{}
 		for filename1, x := range codedGroup {
-			if codedVisit[filename1] {
+			if codedMerge[filename1] {
 				continue
 			}
 			for filename2, y := range codedGroup {
-				if filename1 == filename2 || codedVisit[filename2] {
+				if filename1 == filename2 || codedMerge[filename2] {
 					continue
 				}
 				if sliceContainsFilenames(x.intersection, filename2) && sliceContainsFilenames(y.intersection, filename1) {
@@ -144,9 +145,13 @@ func codeCacheGroup(groups map[string]multicastGroup) map[string]multicastGroup 
 						userID:       append(x.userID, y.userID...),
 						intersection: newIntersection,
 					}
+					//these two can be deleted
+					deleteGroup = append(deleteGroup, filename1, filename2)
 					swapGroup[filename1+"_"+filename2] = newGroup
-					codedVisit[filename1] = true
-					codedVisit[filename2] = true
+					codedMerge[filename1] = true
+					codedMerge[filename2] = true
+					//dont code any further for filename1
+					break
 				}
 			}
 		}
@@ -154,26 +159,24 @@ func codeCacheGroup(groups map[string]multicastGroup) map[string]multicastGroup 
 			//swapGroup having 0 length means no new groups were created
 			break
 		}
-		//keep updating new groups
-		codedGroup = swapGroup
+		//delete items that were grouped
+		for _, x := range deleteGroup {
+			delete(codedGroup, x)
+		}
+		//insert the new mixed items into the codedGroup for the next iteration
+		for filename, group := range swapGroup {
+			codedGroup[filename] = group
+		}
 	}
 
-	//add groups for new coded files
+	//add ports before returning
 	for filename, group := range codedGroup {
-		returnGroup[filename] = group
-	}
-
-	//add the missing ports
-	for filename, group := range returnGroup {
-		progressUDPPort()
-		multicastUser := fmt.Sprintf("%d", currUDPPort)
-		progressUDPPort()
-		multicastServer := fmt.Sprintf("%d", currUDPPort)
+		multicastUser := fmt.Sprintf("%d", progressUDPPort())
+		multicastServer := fmt.Sprintf("%d", progressUDPPort())
 		group.multicastPortUser = multicastUser
 		group.multicastPortServer = multicastServer
 		returnGroup[filename] = group
 	}
-
 	return returnGroup
 }
 
@@ -203,23 +206,41 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 	readyChan := make(chan int, len(users))
 	var wg sync.WaitGroup
 	//serverPort is used for the server to receive data
-	serverAddr, err := net.ResolveUDPAddr("udp", common.ServerIP+":"+serverPort)
-	if err != nil {
-		fmt.Println("error creating multicast address")
-		os.Exit(1)
-	}
+	var serverAddr *net.UDPAddr
+	var err error
+	var conn *net.UDPConn
 
-	conn, err := net.ListenUDP("udp", serverAddr)
-	if err != nil {
-		fmt.Println("Error listening to UDP:", err)
-		os.Exit(1)
+	for {
+		serverAddr, err = net.ResolveUDPAddr("udp", common.ServerIP+":"+serverPort)
+		if err != nil {
+			fmt.Println("error creating multicast address for server",common.ServerIP,"port", serverPort)
+			//get another udp port
+			serverPort = fmt.Sprintf("%d", progressUDPPort())
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		conn, err = net.ListenUDP("udp", serverAddr)
+		if err != nil {
+			fmt.Println("Error listening to UDP:", err)
+			//get another udp port
+			serverPort = fmt.Sprintf("%d", progressUDPPort())
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		break
 	}
 	defer conn.Close()
 	fmt.Println(file, "need ready from users:", users, "at port", serverPort)
 
 	//spread port for users
 	// userPort is the port the users are going to connect to RECEIVE data
-	for _, x := range users {
+
+	//debugging: I am creating a copy of users because for some reason, it does not always fully loop
+	//to send the channel, it works fine on all subsequent logic checks for some reason and idk why
+	//TODO: find the source of this bug
+	copyUser := make([]int, len(users))
+	copy(copyUser, users)
+	for _, x := range copyUser {
 		//channels should have been created by now
 		udpAnnounceChannel[x] <- [2]string{userPort, serverPort}
 		fmt.Println("Server sent udpAnnounceChannel", serverPort, "to user", x, "out of", users, "for", file)
