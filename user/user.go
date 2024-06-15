@@ -29,8 +29,10 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 	ownPort := strconv.Itoa(40000 + userid)
 	//all user cache inuse is set to false for experiment's sake
 	userCache := lru.Constructor(cacheSize)
+	seed := common.SeedMultiplier + int64(userid)
+	rng := rand.New(rand.NewSource(seed))
 	for i := 0; i < iteration; i++ {
-		userRequest := generateRequestFile((userid + 1) * i)
+		userRequest := generateRequestFile(rng, common.MaxFiles)
 		exists, _ := userCache.Get(userRequest, 0)
 		fmt.Println("User", userid, "iteration", i, "started for", userRequest)
 		if !exists {
@@ -77,7 +79,7 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 					//fmt.Println("Error unmarshalling JSON:", err)
 					return
 				}
-				if joinMulticast(response.UserPort, response.ServerPort, ownPort, userid, userRequest) {
+				if joinMulticast(response.UserPort, response.ServerPort, ownPort, userid, userRequest, &resp.StatusCode) {
 					userCache.Put(userRequest, 0)
 				} else {
 					//fmt.Println("Error joining multicast group")
@@ -126,15 +128,12 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 
 // case 335: was swapped with swapped item
 // case 336: cache needs to be fetched from cloud, in-transit
-func generateRequestFile(inputSeed int) string {
+func generateRequestFile(rng *rand.Rand, maxFiles int) string {
 	//this is so I can keep consistent "random" file requests for comparion
-	seed := int64(inputSeed) * common.SeedMultiplier * common.SeedMultiplier
-	source := rand.NewSource(seed)
-	rng := rand.New(source)
-	return "file" + strconv.Itoa(rng.Intn(50)+1)
+	return "file" + strconv.Itoa(rng.Intn(maxFiles)+1)
 }
 
-func joinMulticast(userPort string, serverPort string, ownPort string, userid int, requestFile string) bool {
+func joinMulticast(userPort string, serverPort string, ownPort string, userid int, requestFile string, responseCode *int) bool {
 	// Resolve addresses
 	serverAddr, err := net.ResolveUDPAddr("udp", common.ServerIP+":"+serverPort)
 	if err != nil {
@@ -151,10 +150,11 @@ func joinMulticast(userPort string, serverPort string, ownPort string, userid in
 
 	//ready multicast tunnel
 	var mconn *net.UDPConn
-	for i := 0; i < 3; i++ {
+	for {
 		mconn, err = net.ListenMulticastUDP("udp", nil, multicastAddr)
 		if err != nil {
 			fmt.Println("Error joining multicast group:", err)
+			common.FindPortBind(userPort)
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -194,6 +194,10 @@ func joinMulticast(userPort string, serverPort string, ownPort string, userid in
 		if returnString[0] == "FINISHED" {
 			if common.SliceContainsString(returnString[1:], requestFile) {
 				fmt.Println("User", userid, "received", requestFile, "out of files", returnString[1:], "from port", userPort, "to port", serverPort)
+				if len(returnString[1:]) != 1 {
+					//means a coded file was received
+					*responseCode = 339
+				}
 				closeChan <- true
 				return true
 			}

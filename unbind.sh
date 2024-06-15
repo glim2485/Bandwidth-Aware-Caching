@@ -2,7 +2,7 @@
 
 # Define the range of ports to unbind
 START_PORT=50000
-END_PORT=51000
+END_PORT=60001
 
 # Function to unbind a port
 unbind_port() {
