@@ -20,7 +20,7 @@ type Node struct {
 	next  *Node
 }
 
-// creates an LRU cache with the given capacity
+// Constructor creates an LRU cache with the given capacity.
 func Constructor(capacity int) LRUCache {
 	return LRUCache{
 		capacity: capacity,
@@ -31,51 +31,49 @@ func Constructor(capacity int) LRUCache {
 	}
 }
 
-// gets a key from the current LRUcache
-// returns true and the value of the key if it exists
-// returns false and "none" if it does not
-// count should be 0 for user
+// Get retrieves a key from the current LRU cache.
+// Returns true and the value of the key if it exists.
+// Returns false and "none" if it does not.
 func (c *LRUCache) Get(key string, count int) (bool, string) {
 	if node, ok := c.cache[key]; ok {
-		node.InUse = node.InUse + count
+		node.InUse += count
 		c.moveToFront(node)
 		return true, node.key
 	}
 	return false, "none"
 }
 
-// puts a key into the current LRUcache
-// if it already exists, it moves it to the front
-// if it is full, it deletes the least recently used key
-// USED BY USERS
-
+// UpdateNode updates the usage count of a node.
 func (c *LRUCache) UpdateNode(key string, count int) {
 	if node, ok := c.cache[key]; ok {
-		node.InUse = node.InUse + count
+		node.InUse += count
 	}
 }
+
+// Put inserts a key into the current LRU cache.
+// If it already exists, it moves it to the front.
+// If it is full, it deletes the least recently used key.
 func (c *LRUCache) Put(key string, count int) (bool, string) {
 	deletedKey := "none"
 	if node, ok := c.cache[key]; ok {
 		c.moveToFront(node)
 		return false, "alreadyExists"
-	} else {
-		newNode := &Node{key: key, InUse: count}
-		if len(c.cache) >= c.capacity {
-			//cache full needs deletion
-			deletedKey = c.deleteNode(c.tail)
-			if deletedKey == "none" {
-				//can't delete anything
-				fmt.Println("all cache in use, go contact cloud")
-				return false, "none"
-			}
-			//can delete and add
-			delete(c.cache, deletedKey)
-		}
-		c.cache[key] = newNode
-		c.addToFront(newNode)
-		return true, deletedKey
 	}
+
+	newNode := &Node{key: key, InUse: count}
+	if len(c.cache) >= c.capacity {
+		// Cache is full and needs deletion.
+		deletedKey = c.deleteNode(c.tail)
+		if deletedKey == "none" {
+			fmt.Println("All cache in use, go contact cloud")
+			return false, "none"
+		}
+		// Can delete and add.
+		delete(c.cache, deletedKey)
+	}
+	c.cache[key] = newNode
+	c.addToFront(newNode)
+	return true, deletedKey
 }
 
 func (c *LRUCache) moveToFront(node *Node) {
@@ -86,8 +84,11 @@ func (c *LRUCache) moveToFront(node *Node) {
 	c.addToFront(node)
 }
 
-// used for moving nodes around
+// removeNode removes a node from the linked list.
 func (c *LRUCache) removeNode(node *Node) {
+	if node == nil {
+		return
+	}
 	if node == c.head {
 		c.head = node.next
 		if c.head != nil {
@@ -99,26 +100,34 @@ func (c *LRUCache) removeNode(node *Node) {
 			c.tail.next = nil
 		}
 	} else {
-		node.prev.next = node.next
-		node.next.prev = node.prev
+		if node.prev != nil {
+			node.prev.next = node.next
+		}
+		if node.next != nil {
+			node.next.prev = node.prev
+		}
 	}
 	node.prev = nil
 	node.next = nil
 }
 
-// checks which node can be deleted
+// deleteNode checks which node can be deleted and removes it.
 func (c *LRUCache) deleteNode(node *Node) string {
-	for node.InUse >= 1 {
+	for node != nil && node.InUse >= 1 {
 		node = node.prev
-		if node == nil || c.head == node {
+		if node == nil || node == c.head {
 			return "none"
 		}
+	}
+	if node == nil {
+		return "none"
 	}
 	returnKey := node.key
 	c.removeNode(node)
 	return returnKey
 }
 
+// addToFront adds a node to the front of the linked list.
 func (c *LRUCache) addToFront(node *Node) {
 	if c.head == nil {
 		c.head = node
@@ -130,6 +139,7 @@ func (c *LRUCache) addToFront(node *Node) {
 	}
 }
 
+// GetCacheList returns a list of keys in the cache.
 func (c *LRUCache) GetCacheList() []string {
 	current := c.head
 	count := 0
@@ -138,7 +148,6 @@ func (c *LRUCache) GetCacheList() []string {
 			c.buffer[count] = current.key
 		} else {
 			c.buffer = append(c.buffer, current.key)
-			//fmt.Println("buffer size", SizeOfSlice(c.buffer), " and current key size", unsafe.Sizeof(current.key))
 		}
 		current = current.next
 		count++
@@ -146,12 +155,12 @@ func (c *LRUCache) GetCacheList() []string {
 	return c.buffer[:count]
 }
 
-//debug use
-
+// GetLength returns the current length of the cache.
 func (c *LRUCache) GetLength() int {
 	return len(c.cache)
 }
 
+// SizeOfSlice returns the size of a slice.
 func SizeOfSlice(slice interface{}) uintptr {
 	v := reflect.ValueOf(slice)
 	if v.Kind() != reflect.Slice {

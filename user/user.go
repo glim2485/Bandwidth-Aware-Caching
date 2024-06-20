@@ -85,18 +85,21 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 					//fmt.Println("Error joining multicast group")
 				}
 			case 334:
+				userCache.Put(userRequest, 0)
 				//TODO: need to finish this
-				cloudUrl := "http://" + common.ServerIP + ":" + common.CloudPort + "/getdata"
-				body := bytes.NewBuffer(jsonData)
-				resp, err := http.Post(cloudUrl, "application/json", body)
-				if err != nil {
-					fmt.Println("Error sending request:", err)
-					return
-				}
-				defer resp.Body.Close()
-				if resp.StatusCode == 200 {
-					fmt.Println("Cloud fetch successful")
-				}
+				/*
+					cloudUrl := "http://" + common.ServerIP + ":" + common.CloudPort + "/getdata"
+					body := bytes.NewBuffer(jsonData)
+					resp, err := http.Post(cloudUrl, "application/json", body)
+					if err != nil {
+						fmt.Println("Error sending request:", err)
+						return
+					}
+					defer resp.Body.Close()
+					if resp.StatusCode == 200 {
+						fmt.Println("Cloud fetch successful")
+					}
+				*/
 			}
 			totalTime := int(time.Since(startTime) / time.Millisecond)
 			common.UserDataLogLock.Lock()
@@ -191,12 +194,14 @@ func joinMulticast(userPort string, serverPort string, ownPort string, userid in
 			continue
 		}
 		returnString := checkFinished(string(buf[:n]))
-		if returnString[0] == "FINISHED" {
+		if returnString[1] == "FINISHED" {
 			if common.SliceContainsString(returnString[1:], requestFile) {
-				fmt.Println("User", userid, "received", requestFile, "out of files", returnString[1:], "from port", userPort, "to port", serverPort)
-				if len(returnString[1:]) != 1 {
+				fmt.Println("User", userid, "received", requestFile, "out of files", returnString[2:], "with statements:", returnString[:2], "from port", userPort, "to port", serverPort)
+				if len(returnString[2:]) != 1 {
 					//means a coded file was received
 					*responseCode = 339
+				} else if returnString[0] == "UNI" {
+					*responseCode = 340
 				}
 				closeChan <- true
 				return true

@@ -13,12 +13,11 @@ import (
 
 var concurrentConnection int = 0
 var concurrentConnectionLock sync.Mutex
-var bandwidthPerConnection float64 = common.MaxBandwidth
-var bandwidthLock sync.RWMutex
+var BandwidthPerConnection float64 = common.MaxBandwidth
+var BandwidthLock sync.RWMutex
 var multicastNeeded bool = false
 
 var udpAnnounceChannel = make(map[int]chan [2]string)
-var announceChannelLock sync.Mutex
 var incomingData = make(chan common.UserRequest, 30)
 var edgeCache lru.LRUCache
 var edgeCacheLock sync.Mutex
@@ -36,8 +35,15 @@ type swapItemStruct struct {
 // start server
 func SimulStartServer() {
 	edgeCache = lru.Constructor(common.EdgeCacheSize)
-	for i := 0; i < common.EdgeCacheSize; i++ {
-		edgeCache.Put(fmt.Sprintf("file%d", (i+1)), 1)
+	/*
+		seed := common.SeedMultiplier
+		rng := rand.New(rand.NewSource(seed))
+		newFiles := generatePrecacheFiles(rng, common.MaxFiles)
+	*/
+	fmt.Println("starting server precache")
+	for i := 1; i <= common.EdgeCacheSize; i++ {
+		edgeCache.Put(fmt.Sprintf("file%d", i), 1)
+
 	}
 	//create channels for each user
 	for i := 0; i < common.UserCount; i++ {
@@ -59,6 +65,7 @@ func dataCollector() {
 		select {
 		case <-ticker.C:
 			//use collectedData
+			ticker = time.NewTicker(multicastWaitTime)
 			trackerId++
 			copiedData := make([]common.UserRequest, len(collectedData))
 			copy(copiedData, collectedData)
@@ -82,20 +89,41 @@ func updateConcurrentConnection(amount int) {
 }
 
 func updateBandwidthPerConnection() {
-	bandwidthLock.Lock()
-	defer bandwidthLock.Unlock()
+	BandwidthLock.Lock()
+	defer BandwidthLock.Unlock()
 	if concurrentConnection == 0 {
-		bandwidthPerConnection = common.MaxBandwidth
+		BandwidthPerConnection = common.MaxBandwidth
 	} else {
-		bandwidthPerConnection = common.MaxBandwidth / float64(concurrentConnection)
+		BandwidthPerConnection = common.MaxBandwidth / float64(concurrentConnection)
 		//update multicast needed
-		if bandwidthPerConnection < common.MulticastBandwidthMultiplier*common.MaxBandwidth {
+		if BandwidthPerConnection < common.TargetUserBandwidth {
 			multicastNeeded = true
-			//fmt.Println("Server: Multicast needed")
+			calculateWaitTime(BandwidthPerConnection)
+			fmt.Println("Server: Multicast needed, wait time set to:", multicastWaitTime)
 		} else {
 			multicastNeeded = false
-			//fmt.Println("Server: Multicast not needed")
+			fmt.Println("Server: Multicast not needed")
+			fmt.Printf("%.2f vs Target Bandwidth: %.2f\n", BandwidthPerConnection, common.TargetUserBandwidth)
 		}
+	}
+}
+
+func calculateWaitTime(BandwidthPerConnection float64) {
+	if common.TargetUserBandwidth == 0 || BandwidthPerConnection == 0 {
+		fmt.Println("Error: Bandwidth cannot be zero")
+		return
+	}
+
+	averageDuration := common.DataSize / common.TargetUserBandwidth
+	currentDuration := common.DataSize / BandwidthPerConnection
+	difference := currentDuration - averageDuration
+
+	if difference*0.7 >= 1 {
+		waitTime := 0.7 * difference
+		multicastWaitTime = time.Duration(waitTime) * time.Second
+		fmt.Println("Multicast wait time set to:", multicastWaitTime)
+	} else {
+		fmt.Println("Difference is too small, no wait time set")
 	}
 }
 
@@ -104,11 +132,11 @@ func simulSendData(numconn int) {
 	currentSent := float64(0)
 	updateConcurrentConnection(numconn)
 	for currentSent < common.DataSize {
-		bandwidthLock.RLock()
-		currentSent += bandwidthPerConnection
-		bandwidthLock.RUnlock()
+		BandwidthLock.RLock()
+		currentSent += 0.5 * BandwidthPerConnection
+		BandwidthLock.RUnlock()
 		//fmt.Println("Server: Sending data to some client progress ", currentSent, "/", common.DataSize)
-		time.Sleep(1 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 	}
 	updateConcurrentConnection(-numconn)
 }
@@ -119,10 +147,10 @@ func simulFetchData(requestFile string, c *gin.Context, returnCode int) {
 	currentReceived := float64(0)
 	updateConcurrentConnection(1)
 	for currentReceived < common.DataSize {
-		bandwidthLock.RLock()
-		currentReceived += bandwidthPerConnection
-		bandwidthLock.RUnlock()
-		time.Sleep(1 * time.Second)
+		BandwidthLock.RLock()
+		currentReceived += 0.5 * BandwidthPerConnection
+		BandwidthLock.RUnlock()
+		time.Sleep(500 * time.Millisecond)
 		//fmt.Println("Server:", requestFile, "progress:", currentReceived, "/", common.DataSize)
 	}
 	updateConcurrentConnection(-1)
@@ -162,31 +190,39 @@ func receiveRequest(c *gin.Context) {
 	if err := c.BindJSON(&userData); err != nil {
 		return
 	}
-	fmt.Println("[",trackerId,"]Server: Received request from user", userData.UserID, "for data", userData.RequestFile)
-	if common.EnableMulticast {
-		if multicastNeeded {
-			//multicast data
-			//sending userData to incomingData, located at handleData
-			incomingData <- userData
-			fmt.Println("Server needs to multicast", userData.RequestFile, "to user", userData.UserID)
-			//How do I do this part?
-			returnPorts := <-udpAnnounceChannel[userData.UserID]
-			fmt.Println("Server can send UDP port", returnPorts, "to user", userData.UserID, "for", userData.RequestFile)
-			response := gin.H{
-				//TODO: need to get server
-				"UserPort":      returnPorts[0],
-				"ServerPort":    returnPorts[1],
-				"StatusMessage": "change to Multicast",
+	hit, _ := edgeCache.Get(userData.RequestFile, 1)
+	if !hit {
+		response := gin.H{
+			"StatusMessage": "Redirect to Cloud",
+		}
+		c.JSON(334, response)
+	} else {
+		fmt.Println("[", trackerId, "]Server: Received request from user", userData.UserID, "for data", userData.RequestFile)
+		if common.EnableMulticast {
+			if multicastNeeded {
+				//multicast data
+				//sending userData to incomingData, located at handleData
+				incomingData <- userData
+				fmt.Println("Server needs to multicast", userData.RequestFile, "to user", userData.UserID)
+				//How do I do this part?
+				returnPorts := <-udpAnnounceChannel[userData.UserID]
+				fmt.Println("Server can send UDP port", returnPorts, "to user", userData.UserID, "for", userData.RequestFile)
+				response := gin.H{
+					//TODO: need to get server
+					"UserPort":      returnPorts[0],
+					"ServerPort":    returnPorts[1],
+					"StatusMessage": "change to Multicast",
+				}
+				fmt.Println("Sent ready request to user", userData.UserID, "for", userData.RequestFile, "at port", returnPorts[0], "from port", returnPorts[1])
+				c.JSON(333, response)
+			} else {
+				//fmt.Println("Server: Multicast not needed, fetching data directly for", userData.UserID)
+				sendUnicastData(userData.RequestFile, c)
 			}
-			fmt.Println("Sent ready request to user", userData.UserID, "for", userData.RequestFile, "at port", returnPorts[0], "from port", returnPorts[1])
-			c.JSON(333, response)
 		} else {
 			//fmt.Println("Server: Multicast not needed, fetching data directly for", userData.UserID)
 			sendUnicastData(userData.RequestFile, c)
 		}
-	} else {
-		//fmt.Println("Server: Multicast not needed, fetching data directly for", userData.UserID)
-		sendUnicastData(userData.RequestFile, c)
 	}
 }
 func sendUnicastData(requestFile string, c *gin.Context) {
@@ -302,3 +338,17 @@ func checkSwapItem() string {
 	// all swap items are in transit or waiting to be swapped
 	return "none"
 }
+
+/*
+func generatePrecacheFiles(rng *rand.Rand, maxFiles int) map[int]bool {
+	randFiles := make(map[int]bool)
+	for i := 0; i < common.MaxFiles/2; {
+		randNum := (rng.Intn(common.MaxFiles) + 1)
+		if _, exists := randFiles[randNum]; !exists {
+			randFiles[randNum] = true
+			i++
+		}
+	}
+	return randFiles
+}
+*/

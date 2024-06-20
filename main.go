@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/server"
@@ -14,31 +15,38 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"flag"
 
 	"github.com/xuri/excelize/v2"
 )
 
 func init() {
-    flag.BoolVar(&common.EnableMulticast, "enableMulticast", true, "enable multicast feature")
-    flag.BoolVar(&common.EnableCodeCache, "enableCodecast", true, "enable codecast feature")
-    flag.Int64Var(&common.SeedMultiplier, "seedValue", 7, "seed value")
-	flag.IntVar(&common.UserCount, "userCount", 100, "number of users")
-	flag.IntVar(&common.UserIterations, "userIterations", 25, "number of iterations per user")
+	flag.BoolVar(&common.EnableMulticast, "enableMulticast", true, "enable multicast feature")
+	flag.BoolVar(&common.EnableCodeCache, "enableCodecast", true, "enable codecast feature")
+	flag.Int64Var(&common.SeedMultiplier, "seedValue", 7, "seed value")
+	flag.IntVar(&common.UserCount, "userCount", 200, "number of users")
+	flag.IntVar(&common.UserIterations, "userIterations", 50, "number of iterations per user")
 	flag.IntVar(&common.UserCacheSize, "userCacheSize", 25, "size of user cache")
-	flag.Float64Var(&common.DataSize, "dataSize", 500, "size of data")
-	flag.Float64Var(&common.MaxBandwidth, "maxBandwidth", 2500, "max bandwidth")
-	flag.IntVar(&common.EdgeCacheSizeMultiplier, "edgeCacheSizeMultiplier", 10, "edge cache size multiplier")
-	flag.IntVar(&common.MaxFiles, "maxFiles", 50, "max files")
+	flag.Float64Var(&common.DataSize, "dataSize", 500*1000, "size of data")
+	flag.Float64Var(&common.MaxBandwidth, "maxBandwidth", 10*1000*1000, "max bandwidth")
+	flag.IntVar(&common.EdgeCacheSize, "edgeCacheSize", 200, "edge cache size")
+	flag.IntVar(&common.MaxFiles, "maxFiles", 200, "max files")
 }
+
+var updatingAverage float64 = 0.0
 
 func main() {
 	flag.Parse()
-	common.EdgeCacheSize = common.UserCacheSize * common.EdgeCacheSizeMultiplier
 	stopMemProfile := startProfile("memprofile_", 1*time.Second)
 	defer close(stopMemProfile)
 
 	go server.SimulStartServer()
+	fmt.Println("***Starting Simulation***")
+	fmt.Println("Multicast:", common.EnableMulticast, "and CodeCache:", common.EnableCodeCache)
+	fmt.Println("Seed:", common.SeedMultiplier)
+	fmt.Println("UserCount:", common.UserCount, "and UserIterations:", common.UserIterations)
+	fmt.Println("UserCacheSize:", common.UserCacheSize, ", EdgeCacheSize:", common.EdgeCacheSize, ", and MaxFiles:", common.MaxFiles)
+	fmt.Printf("DataSize(Mb): %.6f and MaxBandwidth: %.6f\n", common.DataSize/1000/1000, common.MaxBandwidth/1000/1000)
+
 	go server.SimulStartCloud()
 	go garbageCollectionFunc(1 * time.Second)
 	var wg sync.WaitGroup
@@ -49,7 +57,12 @@ func main() {
 		go user.SimulUserRequests(i, common.UserIterations, common.UserCacheSize, &wg)
 	}
 	wg.Wait()
+	bandwidthExit := make(chan int)
+	bandwidthAverage := make(chan float64)
+	go logBandwidth(bandwidthExit, bandwidthAverage)
 	endTime := time.Now()
+	bandwidthExit <- 1
+	bandwidthAverageResult := <-bandwidthAverage
 	fmt.Println("simulation finished, now logging into excel sheet")
 	//log data to excel sheet
 	excelDir, err := os.Getwd()
@@ -76,10 +89,12 @@ func main() {
 	f.SetCellValue(sheetName, "B1", fmt.Sprintf("%d", common.UserCacheSize))
 	f.SetCellValue(sheetName, "A2", "edgeCacheSize")
 	f.SetCellValue(sheetName, "B2", fmt.Sprintf("%d", common.EdgeCacheSize))
-	f.SetCellValue(sheetName, "A3", "EdgeBandwidth")
-	f.SetCellValue(sheetName, "B3", fmt.Sprintf("%.4f", common.MaxBandwidth))
-	f.SetCellValue(sheetName, "A4", "SwapItemSize")
-	f.SetCellValue(sheetName, "B4", fmt.Sprintf("%d", common.SwapItemSize))
+	f.SetCellValue(sheetName, "A3", "edgeHitRate")
+	f.SetCellValue(sheetName, "B3", fmt.Sprintf("%.2f", (float64(common.MaxFiles)/float64(common.EdgeCacheSize))*100))
+	f.SetCellValue(sheetName, "A4", "EdgeMaxBandwidth(Mbps)")
+	f.SetCellValue(sheetName, "B4", fmt.Sprintf("%.4f", common.MaxBandwidth/1000))
+	f.SetCellValue(sheetName, "A5", "AverageBandwidth(Mbps)")
+	f.SetCellValue(sheetName, "B5", fmt.Sprintf("%.4f", bandwidthAverageResult/1000))
 
 	f.SetCellValue(sheetName, "D1", "Multicast")
 	f.SetCellValue(sheetName, "E1", fmt.Sprintf("%t", common.EnableMulticast))
@@ -90,11 +105,11 @@ func main() {
 	f.SetCellValue(sheetName, "D4", "Seed")
 	f.SetCellValue(sheetName, "E4", fmt.Sprintf("%d", common.SeedMultiplier))
 
-	f.SetCellValue(sheetName, "A6", "UserID")
-	f.SetCellValue(sheetName, "B6", "ItemName")
-	f.SetCellValue(sheetName, "C6", "CacheHit")
-	f.SetCellValue(sheetName, "D6", "TimeTaken(ms)")
-	cellIndex := 6
+	f.SetCellValue(sheetName, "A7", "UserID")
+	f.SetCellValue(sheetName, "B7", "ItemName")
+	f.SetCellValue(sheetName, "C7", "CacheHit")
+	f.SetCellValue(sheetName, "D7", "TimeTaken(ms)")
+	cellIndex := 7
 	fetchCount := make(map[int]int)
 	for _, d := range common.UserDataLog {
 		cellIndex++
@@ -134,6 +149,24 @@ func main() {
 		fmt.Println(err)
 	}
 	fmt.Println("sucessfully logged to dataLog.xlsx")
+}
+
+func logBandwidth(exitChannel chan int, returnChannel chan float64) {
+	count := 0
+	ticker := time.NewTicker(1 * time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			count++
+			server.BandwidthLock.RLock()
+			currBandwidthPerConnection := server.BandwidthPerConnection
+			server.BandwidthLock.RUnlock()
+			updatingAverage = updatingAverage + (currBandwidthPerConnection-updatingAverage)/float64(count)
+		case <-exitChannel:
+			returnChannel <- updatingAverage
+			return
+		}
+	}
 }
 
 // debugging functions

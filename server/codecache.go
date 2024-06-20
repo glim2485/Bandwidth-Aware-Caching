@@ -213,10 +213,10 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 	for {
 		serverAddr, err = net.ResolveUDPAddr("udp", common.ServerIP+":"+serverPort)
 		if err != nil {
-			fmt.Println("error creating multicast address for server",common.ServerIP,"port", serverPort)
+			fmt.Println("error creating multicast address for server", common.ServerIP, "port", serverPort)
 			//get another udp port
 			serverPort = fmt.Sprintf("%d", progressUDPPort())
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 			continue
 		}
 		conn, err = net.ListenUDP("udp", serverAddr)
@@ -224,12 +224,12 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 			fmt.Println("Error listening to UDP:", err)
 			//get another udp port
 			serverPort = fmt.Sprintf("%d", progressUDPPort())
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 			continue
 		}
 		break
 	}
-	defer conn.Close()
+	defer logAndClose(conn)
 	fmt.Println(file, "need ready from users:", users, "at port", serverPort)
 
 	//spread port for users
@@ -301,10 +301,16 @@ func multicastData(users []int, file string, userPort string, serverPort string)
 		fmt.Println("Error dialing UDP:", err)
 		os.Exit(1)
 	}
-	defer multconn.Close()
+	defer logAndClose(multconn)
 	//here, we should be sending data, but instead we will simulate it
 	simulSendData(1)
-	simulmsg := "FINISHED_" + file
+	var frontString string
+	if len(users) == 1 {
+		frontString = "UNI_"
+	} else {
+		frontString = "MULTI_"
+	}
+	simulmsg := frontString + "FINISHED_" + file
 	//error happens here
 	_, err = multconn.Write([]byte(simulmsg))
 	if err != nil {
@@ -361,4 +367,21 @@ func sliceContainsFilenames(slice []string, filename string) bool {
 		}
 	}
 	return false
+}
+
+func logAndClose(conn *net.UDPConn) {
+	if conn != nil {
+		addr := conn.RemoteAddr()
+		if addr != nil {
+			fmt.Printf("Closing UDP connection to %s\n", addr.String())
+		} else {
+			fmt.Println("Closing UDP connection to unknown address")
+		}
+		err := conn.Close()
+		if err != nil {
+			fmt.Printf("Error closing UDP connection: %v\n", err)
+		}
+	} else {
+		fmt.Println("Attempted to close a nil UDP connection")
+	}
 }

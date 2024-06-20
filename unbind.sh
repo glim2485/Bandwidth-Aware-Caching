@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Define the range of ports to unbind
-START_PORT=50000
-END_PORT=60001
+START_PORT=30000
+END_PORT=40000
 
 # Function to unbind a port
 unbind_port() {
