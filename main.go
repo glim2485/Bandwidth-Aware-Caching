@@ -24,15 +24,17 @@ func init() {
 	flag.BoolVar(&common.EnableCodeCache, "enableCodecast", true, "enable codecast feature")
 	flag.Int64Var(&common.SeedMultiplier, "seedValue", 7, "seed value")
 	flag.IntVar(&common.UserCount, "userCount", 200, "number of users")
+	//roginal 50
 	flag.IntVar(&common.UserIterations, "userIterations", 50, "number of iterations per user")
 	flag.IntVar(&common.UserCacheSize, "userCacheSize", 25, "size of user cache")
 	flag.Float64Var(&common.DataSize, "dataSize", 500*1000, "size of data")
 	flag.Float64Var(&common.MaxBandwidth, "maxBandwidth", 10*1000*1000, "max bandwidth")
 	flag.IntVar(&common.EdgeCacheSize, "edgeCacheSize", 200, "edge cache size")
 	flag.IntVar(&common.MaxFiles, "maxFiles", 200, "max files")
+	flag.BoolVar(&common.UseZipf, "useZipf", false, "use zipf distribution")
+	flag.IntVar(&common.MaxCodedItems, "maxCodedItems", 2, "max coded items")
+	flag.StringVar(&common.SaveFileName, "saveFileName", "dataLog.xlsx", "max coded items")
 }
-
-var updatingAverage float64 = 0.0
 
 func main() {
 	flag.Parse()
@@ -42,13 +44,16 @@ func main() {
 	go server.SimulStartServer()
 	fmt.Println("***Starting Simulation***")
 	fmt.Println("Multicast:", common.EnableMulticast, "and CodeCache:", common.EnableCodeCache)
-	fmt.Println("Seed:", common.SeedMultiplier)
-	fmt.Println("UserCount:", common.UserCount, "and UserIterations:", common.UserIterations)
+	fmt.Println("Seed:", common.SeedMultiplier, "useZipf:", common.UseZipf, "and MaxCodedItems:", common.MaxCodedItems)
+	fmt.Println("UserCount:", common.UserCount, "and UserIterations:", common.UserIterations, "saveLocation:", common.SaveFileName)
 	fmt.Println("UserCacheSize:", common.UserCacheSize, ", EdgeCacheSize:", common.EdgeCacheSize, ", and MaxFiles:", common.MaxFiles)
-	fmt.Printf("DataSize(Mb): %.6f and MaxBandwidth: %.6f\n", common.DataSize/1000/1000, common.MaxBandwidth/1000/1000)
+	fmt.Printf("DataSize(Mb): %.6f and MaxBandwidth(Mb): %.6f\n", common.DataSize/1000/1000, common.MaxBandwidth/1000/1000)
 
 	go server.SimulStartCloud()
 	go garbageCollectionFunc(1 * time.Second)
+	bandwidthExit := make(chan int)
+	bandwidthAverage := make(chan float64)
+	go logBandwidth(bandwidthExit, bandwidthAverage)
 	var wg sync.WaitGroup
 	time.Sleep(5 * time.Second)
 	startTime := time.Now()
@@ -57,16 +62,15 @@ func main() {
 		go user.SimulUserRequests(i, common.UserIterations, common.UserCacheSize, &wg)
 	}
 	wg.Wait()
-	bandwidthExit := make(chan int)
-	bandwidthAverage := make(chan float64)
-	go logBandwidth(bandwidthExit, bandwidthAverage)
+
 	endTime := time.Now()
 	bandwidthExit <- 1
 	bandwidthAverageResult := <-bandwidthAverage
+	fmt.Printf("%.3f for bandwidth average\n", bandwidthAverageResult)
 	fmt.Println("simulation finished, now logging into excel sheet")
 	//log data to excel sheet
 	excelDir, err := os.Getwd()
-	excelDir = filepath.Join(excelDir, "dataLog.xlsx")
+	excelDir = filepath.Join(excelDir, common.SaveFileName)
 	f, err := excelize.OpenFile(excelDir)
 	if err != nil {
 		fmt.Println(err)
@@ -120,8 +124,8 @@ func main() {
 		fetchCount[d.ReturnCode]++
 	}
 
-	f.SetCellValue(sheetName, "G1", "MulticastMultiplier")
-	f.SetCellValue(sheetName, "H1", fmt.Sprintf("%.1f", common.MulticastBandwidthMultiplier))
+	f.SetCellValue(sheetName, "G1", "ZipfEnabled")
+	f.SetCellValue(sheetName, "H1", fmt.Sprintf("%t", common.UseZipf))
 	f.SetCellValue(sheetName, "G2", "MulticastCollectTime")
 	f.SetCellValue(sheetName, "H2", fmt.Sprintf("%d", common.MulticastCollectTime))
 
@@ -135,7 +139,7 @@ func main() {
 
 	f.SetCellValue(sheetName, "J5", "HTTP code")
 	f.SetCellValue(sheetName, "K5", "Fetch Type")
-	f.SetCellValue(sheetName, "I5", "Count")
+	f.SetCellValue(sheetName, "L5", "Count")
 
 	fetchCellValue := 6
 	for k, v := range common.FetchType {
@@ -152,8 +156,12 @@ func main() {
 }
 
 func logBandwidth(exitChannel chan int, returnChannel chan float64) {
+	//let the server and user start first
+	time.Sleep(7 * time.Second)
 	count := 0
 	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	updatingAverage := 0.0
 	for {
 		select {
 		case <-ticker.C:
@@ -162,6 +170,7 @@ func logBandwidth(exitChannel chan int, returnChannel chan float64) {
 			currBandwidthPerConnection := server.BandwidthPerConnection
 			server.BandwidthLock.RUnlock()
 			updatingAverage = updatingAverage + (currBandwidthPerConnection-updatingAverage)/float64(count)
+			fmt.Printf("%.3f for updating average\n", updatingAverage)
 		case <-exitChannel:
 			returnChannel <- updatingAverage
 			return

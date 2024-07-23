@@ -25,7 +25,9 @@ var MaxCodedItems int = 2 //must be equal or greater than 2
 var MulticastCollectTime = 3
 var MulticastBandwidthMultiplier = 0.5
 var MaxFiles int = 200
-var TargetUserBandwidth float64 = 100 * 1000 * 1000 //in mbps to kbps to bytwes
+var TargetUserBandwidth float64 = 100 * 1000 * 1000 //in mbps to kbps to bytes
+var UseZipf bool = false
+var SaveFileName string = "dataLog.xlsx"
 
 // shared structs for users to encode and decode JSON files
 type UserRequest struct {

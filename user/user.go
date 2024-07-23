@@ -31,8 +31,18 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 	userCache := lru.Constructor(cacheSize)
 	seed := common.SeedMultiplier + int64(userid)
 	rng := rand.New(rand.NewSource(seed))
+	var zipfGen *rand.Zipf
+	if common.UseZipf {
+		// Parameters for Zipf distribution
+		s := 1.2 // skew parameter (must be > 1)
+		v := 1.0 // base (must be >= 1)
+		maxFiles := uint64(common.MaxFiles)
+
+		// Create a Zipf generator
+		zipfGen = rand.NewZipf(rng, s, v, maxFiles)
+	}
 	for i := 0; i < iteration; i++ {
-		userRequest := generateRequestFile(rng, common.MaxFiles)
+		userRequest := generateRequestFile(rng, common.MaxFiles, zipfGen)
 		exists, _ := userCache.Get(userRequest, 0)
 		fmt.Println("User", userid, "iteration", i, "started for", userRequest)
 		if !exists {
@@ -131,8 +141,11 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 
 // case 335: was swapped with swapped item
 // case 336: cache needs to be fetched from cloud, in-transit
-func generateRequestFile(rng *rand.Rand, maxFiles int) string {
+func generateRequestFile(rng *rand.Rand, maxFiles int, zipfGen *rand.Zipf) string {
 	//this is so I can keep consistent "random" file requests for comparion
+	if common.UseZipf {
+		return "file" + strconv.Itoa(int(zipfGen.Uint64())+1)
+	}
 	return "file" + strconv.Itoa(rng.Intn(maxFiles)+1)
 }
 
