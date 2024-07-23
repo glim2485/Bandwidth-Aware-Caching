@@ -1,3 +1,4 @@
 # Bandwidth-Aware-Caching
-A repository for paper
-Check simul branch instead of main for now
+A repository with code files for my paper
+So far, the simulator is done with the basics (simul branch), but still uses network protocols for simulations
+Next is to try and implement them in seperate machines
