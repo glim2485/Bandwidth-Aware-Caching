@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"gjlim2485/bandwidthawarecaching/bandmonitor"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/server"
 	"gjlim2485/bandwidthawarecaching/user"
@@ -42,6 +43,7 @@ func main() {
 	defer close(stopMemProfile)
 
 	go server.SimulStartServer()
+	bandmonitor.BandInit()
 	fmt.Println("***Starting Simulation***")
 	fmt.Println("Multicast:", common.EnableMulticast, "and CodeCache:", common.EnableCodeCache)
 	fmt.Println("Seed:", common.SeedMultiplier, "useZipf:", common.UseZipf, "and MaxCodedItems:", common.MaxCodedItems)
@@ -53,9 +55,9 @@ func main() {
 	go garbageCollectionFunc(1 * time.Second)
 	bandwidthExit := make(chan int)
 	bandwidthAverage := make(chan float64)
-	go logBandwidth(bandwidthExit, bandwidthAverage)
+	go bandmonitor.LogBandwidth(bandwidthExit, bandwidthAverage, 7000)
 	var wg sync.WaitGroup
-	time.Sleep(5 * time.Second)
+	time.Sleep(3 * time.Second)
 	startTime := time.Now()
 	for i := 0; i < common.UserCount; i++ {
 		wg.Add(1)
@@ -113,6 +115,7 @@ func main() {
 	f.SetCellValue(sheetName, "B7", "ItemName")
 	f.SetCellValue(sheetName, "C7", "CacheHit")
 	f.SetCellValue(sheetName, "D7", "TimeTaken(ms)")
+	f.SetCellValue(sheetName, "E7", "AvgBandwidth(bps)")
 	cellIndex := 7
 	fetchCount := make(map[int]int)
 	for _, d := range common.UserDataLog {
@@ -121,6 +124,7 @@ func main() {
 		f.SetCellValue(sheetName, fmt.Sprintf("B%d", cellIndex), d.RequestFile)
 		f.SetCellValue(sheetName, fmt.Sprintf("C%d", cellIndex), d.FetchType)
 		f.SetCellValue(sheetName, fmt.Sprintf("D%d", cellIndex), d.TimeTaken)
+		f.SetCellValue(sheetName, fmt.Sprintf("E%d", cellIndex), d.AvgBandwidth)
 		fetchCount[d.ReturnCode]++
 	}
 
@@ -155,20 +159,19 @@ func main() {
 	fmt.Println("sucessfully logged to dataLog.xlsx")
 }
 
+/*
 func logBandwidth(exitChannel chan int, returnChannel chan float64) {
 	//let the server and user start first
 	time.Sleep(7 * time.Second)
 	count := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	updatingAverage := 0.0
 	for {
 		select {
 		case <-ticker.C:
 			count++
-			server.BandwidthLock.RLock()
-			currBandwidthPerConnection := server.BandwidthPerConnection
-			server.BandwidthLock.RUnlock()
+			currentBandwidbandmonitor.GetCurrentBandwidth()
 			updatingAverage = updatingAverage + (currBandwidthPerConnection-updatingAverage)/float64(count)
 			fmt.Printf("%.3f for updating average\n", updatingAverage)
 		case <-exitChannel:
@@ -177,6 +180,7 @@ func logBandwidth(exitChannel chan int, returnChannel chan float64) {
 		}
 	}
 }
+*/
 
 // debugging functions
 func startProfile(filenamePrefix string, interval time.Duration) chan bool {

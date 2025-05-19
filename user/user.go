@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"gjlim2485/bandwidthawarecaching/bandmonitor"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/lru"
 	"io"
@@ -39,7 +40,7 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 		maxFiles := uint64(common.MaxFiles)
 
 		// Create a Zipf generator
-		zipfGen = rand.NewZipf(rng, s, v, maxFiles)
+		zipfGen = rand.NewZipf(rng, s, v, maxFiles-1)
 	}
 	for i := 0; i < iteration; i++ {
 		userRequest := generateRequestFile(rng, common.MaxFiles, zipfGen)
@@ -65,8 +66,13 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 			startTime := time.Now()
 			url := "http://" + common.ServerIP + ":" + common.ServerPort + "/getdata"
 			body := bytes.NewBuffer(jsonData)
+			monitorExit := make(chan int)
+			monitorAverage := make(chan float64)
+			go bandmonitor.LogBandwidth(monitorExit, monitorAverage, 500)
 			//fmt.Println("User", userid, "requesting", userRequest, "from server")
 			resp, err := http.Post(url, "application/json", body)
+			monitorExit <- 1
+			bandwidthAverage := <-monitorAverage
 			if err != nil {
 				fmt.Println("Error sending request:", err)
 				return
@@ -89,7 +95,9 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 					//fmt.Println("Error unmarshalling JSON:", err)
 					return
 				}
-				if joinMulticast(response.UserPort, response.ServerPort, ownPort, userid, userRequest, &resp.StatusCode) {
+				check, newBandwidth := joinMulticast(response.UserPort, response.ServerPort, ownPort, userid, userRequest, &resp.StatusCode)
+				if check {
+					bandwidthAverage = newBandwidth
 					userCache.Put(userRequest, 0)
 				} else {
 					//fmt.Println("Error joining multicast group")
@@ -114,22 +122,24 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 			totalTime := int(time.Since(startTime) / time.Millisecond)
 			common.UserDataLogLock.Lock()
 			common.UserDataLog = append(common.UserDataLog, common.UserDataLogStruct{
-				UserID:      userid,
-				RequestFile: userRequest,
-				ReturnCode:  resp.StatusCode,
-				FetchType:   common.FetchType[resp.StatusCode],
-				TimeTaken:   totalTime,
+				UserID:       userid,
+				RequestFile:  userRequest,
+				ReturnCode:   resp.StatusCode,
+				FetchType:    common.FetchType[resp.StatusCode],
+				TimeTaken:    totalTime,
+				AvgBandwidth: bandwidthAverage,
 			})
 			common.UserDataLogLock.Unlock()
 		} else {
 			fmt.Println("user", userid, "cache hit for", userRequest)
 			common.UserDataLogLock.Lock()
 			common.UserDataLog = append(common.UserDataLog, common.UserDataLogStruct{
-				UserID:      userid,
-				RequestFile: userRequest,
-				ReturnCode:  000,
-				FetchType:   common.FetchType[000],
-				TimeTaken:   0,
+				UserID:       userid,
+				RequestFile:  userRequest,
+				ReturnCode:   000,
+				FetchType:    common.FetchType[000],
+				TimeTaken:    0,
+				AvgBandwidth: 0,
 			})
 			common.UserDataLogLock.Unlock()
 		}
@@ -138,6 +148,30 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 	fmt.Println("User", userid, "finished")
 	wg.Done()
 }
+
+/*
+func monitorBandwidth(exitChannel chan int, returnChannel chan float64) {
+	count := 0
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	updatingAverage := float64(0)
+	for {
+		select {
+		case <-ticker.C:
+			count++
+			currentBandwidth := bandmonitor.GetCurrentBandwidth()
+			if currentBandwidth >= 0 {
+				updatingAverage = updatingAverage + (currentBandwidth-updatingAverage)/float64(count)
+			} else {
+				count-- //ignore this count
+			}
+		case <-exitChannel:
+			returnChannel <- updatingAverage
+			return
+		}
+	}
+}
+*/
 
 // case 335: was swapped with swapped item
 // case 336: cache needs to be fetched from cloud, in-transit
@@ -149,19 +183,19 @@ func generateRequestFile(rng *rand.Rand, maxFiles int, zipfGen *rand.Zipf) strin
 	return "file" + strconv.Itoa(rng.Intn(maxFiles)+1)
 }
 
-func joinMulticast(userPort string, serverPort string, ownPort string, userid int, requestFile string, responseCode *int) bool {
+func joinMulticast(userPort string, serverPort string, ownPort string, userid int, requestFile string, responseCode *int) (bool, float64) {
 	// Resolve addresses
 	serverAddr, err := net.ResolveUDPAddr("udp", common.ServerIP+":"+serverPort)
 	if err != nil {
 		fmt.Println("Error resolving server address:", err)
-		return false
+		return false, 0
 	}
 
 	// Join multicast group to receive video stream
 	multicastAddr, err := net.ResolveUDPAddr("udp", common.MulticastIP+":"+userPort)
 	if err != nil {
 		fmt.Println("Error resolving multicast address:", err)
-		return false
+		return false, 0
 	}
 
 	//ready multicast tunnel
@@ -186,12 +220,12 @@ func joinMulticast(userPort string, serverPort string, ownPort string, userid in
 	clientAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+ownPort)
 	if err != nil {
 		fmt.Println("Error resolving client address:", err)
-		return false
+		return false, 0
 	}
 	conn, err := net.ListenUDP("udp", clientAddr)
 	if err != nil {
 		fmt.Println("Error setting up client connection:", err)
-		return false
+		return false, 0
 	}
 	defer conn.Close()
 
@@ -199,6 +233,9 @@ func joinMulticast(userPort string, serverPort string, ownPort string, userid in
 	closeChan := make(chan bool)
 	go sendReadyMessage(userid, requestFile, serverPort, conn, serverAddr, closeChan) //send ready check 3 times
 	//finish receiving multicast message
+	monitorExit := make(chan int)
+	monitorAverage := make(chan float64)
+	go bandmonitor.LogBandwidth(monitorExit, monitorAverage, 500)
 	for {
 		n, _, err := mconn.ReadFromUDP(buf)
 		//n, src, err := mconn.ReadFromUDP(buf)
@@ -208,6 +245,8 @@ func joinMulticast(userPort string, serverPort string, ownPort string, userid in
 		}
 		returnString := checkFinished(string(buf[:n]))
 		if returnString[1] == "FINISHED" {
+			monitorExit <- 1
+			bandwidthAverage := <-monitorAverage
 			if common.SliceContainsString(returnString[1:], requestFile) {
 				fmt.Println("User", userid, "received", requestFile, "out of files", returnString[2:], "with statements:", returnString[:2], "from port", userPort, "to port", serverPort)
 				if len(returnString[2:]) != 1 {
@@ -217,7 +256,7 @@ func joinMulticast(userPort string, serverPort string, ownPort string, userid in
 					*responseCode = 340
 				}
 				closeChan <- true
-				return true
+				return true, bandwidthAverage
 			}
 		}
 	}

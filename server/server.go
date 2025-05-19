@@ -2,8 +2,10 @@ package server
 
 import (
 	"fmt"
+	"gjlim2485/bandwidthawarecaching/bandmonitor"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/lru"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -11,20 +13,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var concurrentConnection int = 0
-var concurrentConnectionLock sync.Mutex
-var BandwidthPerConnection float64 = common.MaxBandwidth
-var BandwidthLock sync.RWMutex
 var multicastNeeded bool = false
 
 var udpAnnounceChannel = make(map[int]chan [2]string)
-var incomingData = make(chan common.UserRequest, 30)
+var incomingData = make(chan common.UserRequest, common.UserCount)
 var edgeCache lru.LRUCache
 var edgeCacheLock sync.Mutex
 var swapItem = make(map[string]swapItemStruct)
 var swapItemCapacity int = common.SwapItemSize
 var swapItemLock sync.Mutex
 var trackerId int = 0
+var multicastWaitTime = time.Duration(common.MulticastCollectTime) * time.Second
 
 type swapItemStruct struct {
 	fullyCached bool //the entire file exists in the server now
@@ -50,6 +49,7 @@ func SimulStartServer() {
 		udpAnnounceChannel[i] = make(chan [2]string)
 	}
 	go dataCollector()
+	go calculateWaitTime()
 	router := gin.Default()
 
 	router.POST("/getdata", receiveRequest)
@@ -58,14 +58,16 @@ func SimulStartServer() {
 
 // this should be done as a SINGULAR go routine
 func dataCollector() {
-
-	ticker := time.NewTicker(multicastWaitTime)
+	//initial ticker
+	newTime := 3000
+	fmt.Println("initial wait time set to:", newTime, "ms")
+	common.MulticastCollectTime = newTime
+	ticker := time.NewTicker(time.Duration(newTime) * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			//use collectedData
-			ticker = time.NewTicker(multicastWaitTime)
 			trackerId++
 			copiedData := make([]common.UserRequest, len(collectedData))
 			copy(copiedData, collectedData)
@@ -74,6 +76,8 @@ func dataCollector() {
 			//fmt.Println("[", trackerId-1, "]Server handling data", copiedData)
 			//reset collectedData
 			collectedData = nil
+			ticker.Stop()
+			ticker = time.NewTicker(multicastWaitTime)
 		case data := <-incomingData:
 			//fmt.Println("[", trackerId, "]Server: collected user", data.UserID, "request for", data.RequestFile)
 			collectedData = append(collectedData, data)
@@ -81,79 +85,69 @@ func dataCollector() {
 	}
 }
 
-func updateConcurrentConnection(amount int) {
-	concurrentConnectionLock.Lock()
-	defer concurrentConnectionLock.Unlock()
-	concurrentConnection += amount
-	updateBandwidthPerConnection()
-}
+func calculateWaitTime() {
+	previousTime := 0
+	time.Sleep(2 * time.Second) //just to match with the main.go server
+	for {
+		currentBandwidth := bandmonitor.GetCurrentBandwidth()
+		averageDuration := common.DataSize / common.TargetUserBandwidth
+		currentDuration := common.DataSize / currentBandwidth
+		difference := currentDuration - averageDuration
 
-func updateBandwidthPerConnection() {
-	BandwidthLock.Lock()
-	defer BandwidthLock.Unlock()
-	if concurrentConnection == 0 {
-		BandwidthPerConnection = common.MaxBandwidth
-	} else {
-		BandwidthPerConnection = common.MaxBandwidth / float64(concurrentConnection)
-		//update multicast needed
-		if BandwidthPerConnection < common.TargetUserBandwidth {
+		if difference*0.7 >= 1 {
+			waitTime := int(math.Ceil(0.7 * difference))
+			waitTime = findMax(waitTime, 1000)
+			if waitTime == previousTime {
+				// no change in wait time
+				continue
+			}
+			previousTime = waitTime
+			//multicastWaitTime = time.Duration(waitTime) * time.Millisecond
+			multicastWaitTime = time.Duration(3000) * time.Millisecond
 			multicastNeeded = true
-			calculateWaitTime(BandwidthPerConnection)
-			fmt.Println("Server: Multicast needed, wait time set to:", multicastWaitTime)
+			fmt.Println("Multicast wait time set to:", multicastWaitTime)
 		} else {
 			multicastNeeded = false
-			fmt.Println("Server: Multicast not needed")
-			fmt.Printf("%.2f vs Target Bandwidth: %.2f\n", BandwidthPerConnection, common.TargetUserBandwidth)
+			multicastWaitTime = 1 * time.Second
+			fmt.Println("Difference is too small, wait time set to min, disabled multicast")
 		}
+		time.Sleep(1 * time.Second)
 	}
 }
 
-func calculateWaitTime(BandwidthPerConnection float64) {
-	if common.TargetUserBandwidth == 0 || BandwidthPerConnection == 0 {
-		fmt.Println("Error: Bandwidth cannot be zero")
-		return
+func findMax(a int, b int) int {
+	if a > b {
+		return a
 	}
-
-	averageDuration := common.DataSize / common.TargetUserBandwidth
-	currentDuration := common.DataSize / BandwidthPerConnection
-	difference := currentDuration - averageDuration
-
-	if difference*0.7 >= 1 {
-		waitTime := 0.7 * difference
-		multicastWaitTime = time.Duration(waitTime) * time.Second
-		fmt.Println("Multicast wait time set to:", multicastWaitTime)
-	} else {
-		fmt.Println("Difference is too small, no wait time set")
-	}
+	return b
 }
 
 // all apicalls
-func simulSendData(numconn int) {
+func simulSendData(numconn float64) {
 	currentSent := float64(0)
-	updateConcurrentConnection(numconn)
+	bandmonitor.UpdateUserCount(numconn)
 	for currentSent < common.DataSize {
-		BandwidthLock.RLock()
-		currentSent += 0.5 * BandwidthPerConnection
-		BandwidthLock.RUnlock()
+		bandwidthPerConnection := bandmonitor.GetCurrentBandwidth()
+		currentSent += 0.5 * bandwidthPerConnection
 		//fmt.Println("Server: Sending data to some client progress ", currentSent, "/", common.DataSize)
 		time.Sleep(500 * time.Millisecond)
 	}
-	updateConcurrentConnection(-numconn)
+	bandmonitor.UpdateUserCount(-numconn)
 }
 
 // to be used for cloud -> edge
+// NOT used for base experiment
 func simulFetchData(requestFile string, c *gin.Context, returnCode int) {
 	//fmt.Println("Server: Fetching data from cloud for", requestFile)
 	currentReceived := float64(0)
-	updateConcurrentConnection(1)
+	bandmonitor.UpdateUserCount(1.0)
 	for currentReceived < common.DataSize {
-		BandwidthLock.RLock()
-		currentReceived += 0.5 * BandwidthPerConnection
-		BandwidthLock.RUnlock()
+		bandwidthPerConnection := bandmonitor.GetCurrentBandwidth()
+		currentReceived += 0.5 * bandwidthPerConnection
 		time.Sleep(500 * time.Millisecond)
 		//fmt.Println("Server:", requestFile, "progress:", currentReceived, "/", common.DataSize)
 	}
-	updateConcurrentConnection(-1)
+	bandmonitor.UpdateUserCount(-1.0)
 	//fmt.Println("Server: Data fetched from cloud for", requestFile)
 	canSwap := false
 	//wait until a cache is stop being used to be swapped
@@ -178,7 +172,7 @@ func simulFetchData(requestFile string, c *gin.Context, returnCode int) {
 		edgeCacheLock.Unlock()
 	}
 	//fmt.Println("Server: Sending", requestFile, "to client")
-	simulSendData(1)
+	simulSendData(1.0)
 	edgeCacheLock.Lock()
 	edgeCache.UpdateNode(requestFile, -1)
 	edgeCacheLock.Unlock()
@@ -232,7 +226,7 @@ func sendUnicastData(requestFile string, c *gin.Context) {
 		//exists in cache, http 200 for hit
 		//fmt.Println("Server cache hit for", requestFile)
 		edgeCacheLock.Unlock()
-		simulSendData(1)
+		simulSendData(1.0)
 		edgeCacheLock.Lock()
 		edgeCache.UpdateNode(requestFile, -1)
 		edgeCacheLock.Unlock()
@@ -260,7 +254,7 @@ func swapCacheAndSwap(requestFile string, c *gin.Context) {
 				inEdge, _ = edgeCache.Get(requestFile, 1)
 				edgeCacheLock.Unlock()
 			}
-			simulSendData(1)
+			simulSendData(1.0)
 			edgeCacheLock.Lock()
 			edgeCache.UpdateNode(requestFile, -1)
 			edgeCacheLock.Unlock()
@@ -287,7 +281,7 @@ func swapCacheAndSwap(requestFile string, c *gin.Context) {
 			swapItemLock.Unlock()
 			edgeCacheLock.Unlock()
 		}
-		simulSendData(1)
+		simulSendData(1.0)
 		edgeCacheLock.Lock()
 		edgeCache.UpdateNode(requestFile, -1)
 		edgeCacheLock.Unlock()

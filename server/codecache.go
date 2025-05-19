@@ -14,7 +14,6 @@ import (
 var collectedData = make([]common.UserRequest, 0)
 var currUDPPort = 50000
 var UDPlock sync.RWMutex
-var multicastWaitTime = time.Duration(common.MulticastCollectTime) * time.Second
 
 type multicastGroup struct {
 	userID              []int
