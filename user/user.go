@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"gjlim2485/bandwidthawarecaching/common"
 	"gjlim2485/bandwidthawarecaching/lru"
+	"gjlim2485/bandwidthawarecaching/server"
 	"io"
 	"math/rand"
 	"net"
@@ -39,7 +40,7 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 		maxFiles := uint64(common.MaxFiles)
 
 		// Create a Zipf generator
-		zipfGen = rand.NewZipf(rng, s, v, maxFiles)
+		zipfGen = rand.NewZipf(rng, s, v, maxFiles-1)
 	}
 	for i := 0; i < iteration; i++ {
 		userRequest := generateRequestFile(rng, common.MaxFiles, zipfGen)
@@ -62,17 +63,28 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 				fmt.Println("Error marshalling JSON:", err)
 				return
 			}
+
+		StartRequest: //label for retry
 			startTime := time.Now()
 			url := "http://" + common.ServerIP + ":" + common.ServerPort + "/getdata"
 			body := bytes.NewBuffer(jsonData)
+			monitorExit := make(chan int)
+			monitorAverage := make(chan float64)
+			go monitorBandwidth(monitorExit, monitorAverage)
 			//fmt.Println("User", userid, "requesting", userRequest, "from server")
 			resp, err := http.Post(url, "application/json", body)
 			if err != nil {
-				fmt.Println("Error sending request:", err)
-				return
+				fmt.Println("User", userid, "Error sending request:", err, "for request file", userRequest, ". Retrying after one second")
+				monitorExit <- 1
+				dumpFile := <-monitorAverage
+				fmt.Println("flush", dumpFile)
+				time.Sleep(1 * time.Second)
+				goto StartRequest
 			}
 			defer resp.Body.Close()
 			//fmt.Println(common.FetchType[resp.StatusCode])
+			monitorExit <- 1
+			bandwidthAverage := <-monitorAverage
 			switch resp.StatusCode {
 			case 200:
 				userCache.Put(userRequest, 0)
@@ -114,22 +126,24 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 			totalTime := int(time.Since(startTime) / time.Millisecond)
 			common.UserDataLogLock.Lock()
 			common.UserDataLog = append(common.UserDataLog, common.UserDataLogStruct{
-				UserID:      userid,
-				RequestFile: userRequest,
-				ReturnCode:  resp.StatusCode,
-				FetchType:   common.FetchType[resp.StatusCode],
-				TimeTaken:   totalTime,
+				UserID:       userid,
+				RequestFile:  userRequest,
+				ReturnCode:   resp.StatusCode,
+				FetchType:    common.FetchType[resp.StatusCode],
+				TimeTaken:    totalTime,
+				AvgBandwidth: bandwidthAverage,
 			})
 			common.UserDataLogLock.Unlock()
 		} else {
 			fmt.Println("user", userid, "cache hit for", userRequest)
 			common.UserDataLogLock.Lock()
 			common.UserDataLog = append(common.UserDataLog, common.UserDataLogStruct{
-				UserID:      userid,
-				RequestFile: userRequest,
-				ReturnCode:  000,
-				FetchType:   common.FetchType[000],
-				TimeTaken:   0,
+				UserID:       userid,
+				RequestFile:  userRequest,
+				ReturnCode:   000,
+				FetchType:    common.FetchType[000],
+				TimeTaken:    0,
+				AvgBandwidth: 0,
 			})
 			common.UserDataLogLock.Unlock()
 		}
@@ -137,6 +151,36 @@ func SimulUserRequests(userid int, iteration int, cacheSize int, wg *sync.WaitGr
 	}
 	fmt.Println("User", userid, "finished")
 	wg.Done()
+}
+
+func monitorBandwidth(exitChannel chan int, returnChannel chan float64) {
+	count := 1
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	server.ConcurrentConnectionLock.RLock()
+	currUserCount := server.ConcurrentConnection
+	server.ConcurrentConnectionLock.RUnlock()
+	if currUserCount <= 0 {
+		currUserCount = 1
+	}
+	updatingAverage := common.MaxBandwidth / float64(currUserCount) //initial average
+	for {
+		select {
+		case <-ticker.C:
+			count++
+			server.ConcurrentConnectionLock.RLock()
+			currUserCount := server.ConcurrentConnection
+			server.ConcurrentConnectionLock.RUnlock()
+			if currUserCount <= 0 {
+				currUserCount = 1
+			}
+			currentBandwidth := common.MaxBandwidth / float64(currUserCount)
+			updatingAverage = updatingAverage + (currentBandwidth-updatingAverage)/float64(count)
+		case <-exitChannel:
+			returnChannel <- updatingAverage
+			return
+		}
+	}
 }
 
 // case 335: was swapped with swapped item

@@ -11,8 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var concurrentConnection int = 0
-var concurrentConnectionLock sync.Mutex
+var ConcurrentConnection int = 0
+var ConcurrentConnectionLock sync.RWMutex
 var BandwidthPerConnection float64 = common.MaxBandwidth
 var BandwidthLock sync.RWMutex
 var multicastNeeded bool = false
@@ -82,19 +82,19 @@ func dataCollector() {
 }
 
 func updateConcurrentConnection(amount int) {
-	concurrentConnectionLock.Lock()
-	defer concurrentConnectionLock.Unlock()
-	concurrentConnection += amount
+	ConcurrentConnectionLock.Lock()
+	defer ConcurrentConnectionLock.Unlock()
+	ConcurrentConnection += amount
 	updateBandwidthPerConnection()
 }
 
 func updateBandwidthPerConnection() {
 	BandwidthLock.Lock()
 	defer BandwidthLock.Unlock()
-	if concurrentConnection == 0 {
+	if ConcurrentConnection == 0 {
 		BandwidthPerConnection = common.MaxBandwidth
 	} else {
-		BandwidthPerConnection = common.MaxBandwidth / float64(concurrentConnection)
+		BandwidthPerConnection = common.MaxBandwidth / float64(ConcurrentConnection)
 		//update multicast needed
 		if BandwidthPerConnection < common.TargetUserBandwidth {
 			multicastNeeded = true

@@ -41,11 +41,12 @@ var UserDataLog []UserDataLogStruct
 var UserDataLogLock sync.Mutex
 
 type UserDataLogStruct struct {
-	UserID      int    `json:"UserID"`
-	RequestFile string `json:"RequestFile"`
-	ReturnCode  int    `json:"ReturnCode"`
-	FetchType   string `json:"FetchType"`
-	TimeTaken   int    `json:"TimeTaken"`
+	UserID       int     `json:"UserID"`
+	RequestFile  string  `json:"RequestFile"`
+	ReturnCode   int     `json:"ReturnCode"`
+	FetchType    string  `json:"FetchType"`
+	TimeTaken    int     `json:"TimeTaken"`
+	AvgBandwidth float64 `json:"AvgBandwidth"`
 }
 
 var FetchType = map[int]string{

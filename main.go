@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"gjlim2485/bandwidthawarecaching/common"
@@ -16,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -55,14 +58,20 @@ func main() {
 	bandwidthAverage := make(chan float64)
 	go logBandwidth(bandwidthExit, bandwidthAverage)
 	var wg sync.WaitGroup
-	time.Sleep(5 * time.Second)
 	startTime := time.Now()
 	for i := 0; i < common.UserCount; i++ {
+		/*
+			if i == 60 || i == 80 {
+				//added wait time for 50-70 and 70-100 to simulate small joins
+				time.Sleep(3 * time.Minute)
+			}
+		*/
 		wg.Add(1)
 		go user.SimulUserRequests(i, common.UserIterations, common.UserCacheSize, &wg)
 	}
+	go monitorMemory()
+	go monitorCPU()
 	wg.Wait()
-
 	endTime := time.Now()
 	bandwidthExit <- 1
 	bandwidthAverageResult := <-bandwidthAverage
@@ -113,6 +122,7 @@ func main() {
 	f.SetCellValue(sheetName, "B7", "ItemName")
 	f.SetCellValue(sheetName, "C7", "CacheHit")
 	f.SetCellValue(sheetName, "D7", "TimeTaken(ms)")
+	f.SetCellValue(sheetName, "E7", "AvgBandwidth(bps)")
 	cellIndex := 7
 	fetchCount := make(map[int]int)
 	for _, d := range common.UserDataLog {
@@ -121,6 +131,7 @@ func main() {
 		f.SetCellValue(sheetName, fmt.Sprintf("B%d", cellIndex), d.RequestFile)
 		f.SetCellValue(sheetName, fmt.Sprintf("C%d", cellIndex), d.FetchType)
 		f.SetCellValue(sheetName, fmt.Sprintf("D%d", cellIndex), d.TimeTaken)
+		f.SetCellValue(sheetName, fmt.Sprintf("E%d", cellIndex), d.AvgBandwidth)
 		fetchCount[d.ReturnCode]++
 	}
 
@@ -277,5 +288,87 @@ func garbageCollectionFunc(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	for range ticker.C {
 		runtime.GC()
+	}
+}
+
+func monitorMemory() {
+	// Wait until the first client connects.
+	fmt.Println("[Memory Monitor] Starting memory logging...")
+	startTime := time.Now()
+
+	// Create (or overwrite) a CSV file.
+	file, err := os.Create("memory_usage_log.csv")
+	if err != nil {
+		fmt.Println("Error creating CSV file:", err)
+		return
+	}
+	defer file.Close()
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header.
+	writer.Write([]string{"Time (seconds)", "Max Memory (MB)", "Used Memory (MB)", "Memory Usage (%)"})
+
+	for {
+		// Get overall memory usage statistics.
+		v, err := mem.VirtualMemory()
+		if err != nil {
+			fmt.Println("Error getting memory usage:", err)
+			continue
+		}
+
+		elapsed := time.Since(startTime).Seconds()
+		totalMemMB := float64(v.Total) / (1024 * 1024)
+		usedMemMB := float64(v.Used) / (1024 * 1024)
+		usagePercent := v.UsedPercent
+
+		// Convert values to strings.
+		timeStr := strconv.FormatFloat(elapsed, 'f', 2, 64)
+		totalStr := strconv.FormatFloat(totalMemMB, 'f', 2, 64)
+		usedStr := strconv.FormatFloat(usedMemMB, 'f', 2, 64)
+		percStr := strconv.FormatFloat(usagePercent, 'f', 2, 64)
+
+		// Write the row to CSV.
+		writer.Write([]string{timeStr, totalStr, usedStr, percStr})
+		writer.Flush() // Ensure it's written to file promptly.
+
+		// Also print to the console.
+		fmt.Printf("[Memory Monitor] Time: %.2f sec, Max Memory: %.2f MB, Used Memory: %.2f MB, Memory Usage: %.2f%%\n",
+			elapsed, totalMemMB, usedMemMB, usagePercent)
+
+		// Pause for one second to log only once per second.
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func monitorCPU() {
+	// Wait until a client connects.
+	fmt.Println("[CPU Monitor] Starting CPU logging...")
+	startTime := time.Now()
+
+	// Create (or overwrite) a CSV file.
+	file, err := os.Create("cpu_usage_log.csv")
+	if err != nil {
+		fmt.Println("Error creating CSV file:", err)
+		return
+	}
+	defer file.Close()
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+	// Write header.
+	writer.Write([]string{"Time (seconds)", "CPU Usage (%)"})
+
+	for {
+		// cpu.Percent with an interval waits for one second and returns overall usage.
+		percentages, err := cpu.Percent(time.Second, false)
+		if err != nil || len(percentages) == 0 {
+			fmt.Println("Error getting CPU percent:", err)
+			continue
+		}
+		elapsed := time.Since(startTime).Seconds()
+		usageStr := fmt.Sprintf("%.2f", percentages[0])
+		writer.Write([]string{strconv.FormatFloat(elapsed, 'f', 2, 64), usageStr})
+		writer.Flush()
+		fmt.Printf("[CPU Monitor] Time: %.2f sec, CPU Usage: %s%%\n", elapsed, usageStr)
 	}
 }
